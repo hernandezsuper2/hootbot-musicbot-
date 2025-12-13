@@ -102,6 +102,7 @@ class MusicBot:
         self.current_track = None
         self.info_cache = {}  # NEW: Cache extracted info by URL
         self.cache_times = {}  # Track when cache entries were added
+        self.preload_task = None  # Background task for preloading next song
         
         # Ensure download folder exists
         if not os.path.exists(DOWNLOAD_FOLDER):
@@ -377,9 +378,83 @@ class MusicBot:
                 logger.error("HTTP 403 Forbidden - YouTube may be blocking yt-dlp. Consider updating: pip install -U yt-dlp")
         return None, None
     
-    async def search_youtube(self, query, max_results=1):
-        """Search YouTube and return video URLs."""
+    async def preload_next_song(self):
+        """Preload the next song in the background to reduce transition time."""
         try:
+            if not self.queue or len(self.queue) == 0:
+                return
+            
+            next_entry = self.queue[0]
+            
+            # Skip if already has cached info
+            if next_entry.info:
+                logger.info(f"Next song already has cached info: {next_entry.title}")
+                return
+            
+            logger.info(f"🔄 Preloading next song in background: {next_entry.title}")
+            
+            # Extract info
+            if ULTRA_FAST:
+                next_entry.info = await self.extract_info_fast(next_entry.url)
+            else:
+                next_entry.info = await self.extract_info(next_entry.url)
+            
+            if not next_entry.info:
+                logger.warning(f"Failed to preload info for: {next_entry.title}")
+                return
+            
+            # If FORCE_DOWNLOAD is enabled, also predownload the file
+            if FORCE_DOWNLOAD:
+                logger.info(f"📥 Pre-downloading: {next_entry.title}")
+                filepath, _ = await self.download_audio(next_entry.url, next_entry.title)
+                if filepath:
+                    logger.info(f"✅ Pre-downloaded ready: {next_entry.title}")
+                else:
+                    logger.warning(f"Pre-download failed for: {next_entry.title}")
+            else:
+                logger.info(f"✅ Preload complete: {next_entry.title}")
+                
+        except Exception as e:
+            logger.error(f"Error preloading next song: {e}")
+    
+    def correct_artist_spelling(self, query):
+        """Correct common misspellings of artist names."""
+        # Dictionary of common misspellings -> correct spelling
+        corrections = {
+            'chappel roan': 'chappell roan',
+            'chapel roan': 'chappell roan',
+            'chapell roan': 'chappell roan',
+            'billy eilish': 'billie eilish',
+            'bille eilish': 'billie eilish',
+            'taylor swift': 'taylor swift',
+            'arianna grande': 'ariana grande',
+            'ariana grand': 'ariana grande',
+            'dua lipa': 'dua lipa',
+            'olivia rodrigo': 'olivia rodrigo',
+            'olivia rodrigues': 'olivia rodrigo',
+            'sabrina carpenter': 'sabrina carpenter',
+            'sabrina carpener': 'sabrina carpenter',
+            'doja cat': 'doja cat',
+            'dojacat': 'doja cat',
+            'sza': 'sza',
+            's z a': 'sza',
+        }
+        
+        query_lower = query.lower()
+        for misspelling, correct in corrections.items():
+            if misspelling in query_lower:
+                corrected = query_lower.replace(misspelling, correct)
+                logger.info(f"Corrected spelling: '{query}' -> '{corrected}'")
+                return corrected
+        
+        return query
+    
+    async def search_youtube(self, query, max_results=1):
+        """Search YouTube and return video URLs, filtering out concerts, shorts, and live streams."""
+        try:
+            # Correct common artist name misspellings
+            query = self.correct_artist_spelling(query)
+            
             logger.info(f"Searching YouTube for: {query}")
             loop = asyncio.get_event_loop()
             
@@ -401,8 +476,10 @@ class MusicBot:
             
             search_ytdl = yt_dlp.YoutubeDL(search_opts)
             
-            # Search for videos
-            search_query = f"ytsearch{max_results}:{query}"
+            # Search for more results than needed so we can filter out unwanted content
+            # Hint to YouTube to prefer VEVO/Topic, then we'll strictly filter
+            search_query = f"ytsearch{max_results * 15}:{query} official"  # Get 15x results to filter
+            
             info = await loop.run_in_executor(
                 None,
                 lambda: search_ytdl.extract_info(search_query, download=False)
@@ -412,17 +489,208 @@ class MusicBot:
                 logger.warning(f"No results found for: {query}")
                 return []
             
-            results = []
+            logger.info(f"YouTube returned {len(info['entries'])} results for: {query}")
+            
+            # Filter out unwanted content and prioritize official music
+            filtered_results = []
+            seen_songs = set()  # Track unique song titles
+            
+            import re
+            
+            def normalize_title(title):
+                """Extract core song title for deduplication."""
+                # Convert to lowercase first
+                title = title.lower()
+                # Remove everything in parentheses and brackets
+                title = re.sub(r'\([^)]*\)', '', title)
+                title = re.sub(r'\[[^\]]*\]', '', title)
+                # Remove common words that don't affect song identity
+                remove_words = ['official', 'music', 'video', 'audio', 'lyric', 'lyrics']
+                for word in remove_words:
+                    title = title.replace(word, '')
+                # Remove common separators and extra info - take last part (song title)
+                parts = re.split(r'[-–—|]', title)
+                # Usually format is "Artist - Song Title", so take the last significant part
+                title = parts[-1] if len(parts) > 1 else parts[0]
+                # Remove extra whitespace
+                title = ' '.join(title.split())
+                return title
+            
             for entry in info['entries']:
                 if entry:
                     video_id = entry.get('id')
-                    title = entry.get('title', 'Unknown')
+                    original_title = entry.get('title', 'Unknown')
+                    uploader = entry.get('uploader', '').lower()
+                    channel = entry.get('channel', '').lower()
+                    duration = entry.get('duration', 0)
+                    
+                    # Accept VEVO, Topic, or artist's own official channel
+                    is_vevo = 'vevo' in uploader or 'vevo' in channel
+                    is_topic = 'topic' in uploader or 'topic' in channel or '- topic' in channel
+                    
+                    # Extract artist name from query
+                    artist_query = query.lower()
+                    for word in ['official', 'music', 'video', 'audio', 'vevo', 'topic', 'song']:
+                        artist_query = artist_query.replace(word, '')
+                    artist_query = ' '.join(artist_query.split())
+                    
+                    # Check if channel name matches artist name OR any word from query
+                    # This allows finding songs even when searching by song title instead of artist
+                    is_artist_channel = False
+                    if artist_query:
+                        query_words = [word for word in artist_query.split() if len(word) > 3]
+                        # Check if any significant word from query appears in channel
+                        is_artist_channel = any(word in uploader or word in channel for word in query_words)
+                    
+                    # Check if this is a song title match (query words appear in video title)
+                    title_lower = original_title.lower()
+                    title_match = False
+                    if artist_query:
+                        query_words = [word for word in artist_query.split() if len(word) > 3]
+                        words_in_title = sum(1 for word in query_words if word in title_lower)
+                        # If 60%+ of search words appear in title, it's likely the right song
+                        if query_words and words_in_title >= len(query_words) * 0.6:
+                            title_match = True
+                    
+                    # Be lenient: accept if any of these are true
+                    has_official_indicators = any(indicator in title_lower for indicator in ['official', 'lyric', 'lyrics', 'audio'])
+                    
+                    if not (is_vevo or is_topic or is_artist_channel or has_official_indicators or title_match):
+                        logger.debug(f"Filtered out (not official): {original_title[:50]} (channel: {uploader})")
+                        continue
+                    
+                    channel_type = 'VEVO' if is_vevo else ('Topic' if is_topic else ('Artist' if is_artist_channel else 'Other'))
+                    logger.info(f"Found {channel_type} result: {original_title[:50]}...")
+                    
+
+                    
+                    # Basic sanity checks
+                    if duration and (duration < 60 or duration > 600):
+                        logger.debug(f"Filtered out: {original_title} (duration: {duration}s)")
+                        continue
+                    
+                    # Filter out promotional/announcement videos (not actual songs)
+                    title_lower = original_title.lower()
+                    
+                    # Reject videos with hashtags unless it's clearly a song (artist - title format)
+                    if '#' in original_title:
+                        if ' - ' not in original_title:
+                            logger.debug(f"Filtered out: {original_title} (hashtags without song format)")
+                            continue
+                    
+                    # Reject obvious non-songs and non-music content
+                    non_song_phrases = [
+                        'if you liked', 'if you like', 'just you wait', 
+                        'coming soon', 'announcement', 'teaser', 'snippet', 'preview',
+                        'new album', 'new ep', 'out now', 'available now',
+                        'listen to', 'check out', 'stream now',
+                        'tv series', 'tv show', 'episode', 'season', 'trailer',
+                        'movie', 'film', 'soundtrack', 'ost', 'theme song',
+                        'adaptation', 'anime', 'drama', 'netflix', 'hbo',
+                        'scene from', 'clip from', 'full movie', 'full episode',
+                        ' amv ', 'amv|', '|amv', 'anime music video',
+                        'fan made', 'fanmade', 'fan video', 'mmd', 'animation'
+                    ]
+                    if any(phrase in title_lower for phrase in non_song_phrases):
+                        logger.debug(f"Filtered out: {original_title} (non-music content)")
+                        continue
+                    
+                    # For artist channels, require proper song format (Artist - Title) or standard music video keywords
+                    if is_artist_channel and not is_vevo and not is_topic:
+                        has_proper_format = ' - ' in original_title or '"' in original_title
+                        has_music_keywords = any(keyword in title_lower for keyword in ['official music video', 'official video', 'official audio', 'lyrics'])
+                        
+                        if not (has_proper_format or has_music_keywords):
+                            logger.debug(f"Filtered out: {original_title} (artist channel but no song format)")
+                            continue
+                    
+                    # Score: Start with channel type base score
+                    score = 100 if is_vevo else 90
+                    
+                    # CRITICAL: Title matching (most important for finding the right song)
+                    # Use original query, not just artist_query
+                    original_query_lower = query.lower()
+                    for word in ['official', 'music', 'video', 'audio', 'vevo', 'topic', 'song']:
+                        original_query_lower = original_query_lower.replace(word, '')
+                    original_query_lower = ' '.join(original_query_lower.split())
+                    
+                    query_words = [word for word in original_query_lower.split() if len(word) > 2]
+                    title_words_list = title_lower.split()
+                    
+                    # Count exact word matches
+                    matching_words = sum(1 for word in query_words if word in title_words_list)
+                    
+                    # Calculate match percentage
+                    if query_words:
+                        match_percentage = matching_words / len(query_words)
+                        
+                        # HUGE boost for near-perfect matches
+                        if match_percentage >= 0.9:  # 90%+ match
+                            score += 200
+                            logger.info(f"  ⭐ EXCELLENT match: {matching_words}/{len(query_words)} words")
+                        elif match_percentage >= 0.7:  # 70-89% match
+                            score += 100
+                            logger.info(f"  ✓ Good match: {matching_words}/{len(query_words)} words")
+                        elif match_percentage >= 0.5:  # 50-69% match
+                            score += 50
+                            logger.debug(f"  ~ Partial match: {matching_words}/{len(query_words)} words")
+                    
+                    # Extra boost for official music video indicators
+                    music_indicators = ['official music video', 'official video', 'official audio', 'official lyric']
+                    if any(keyword in title_lower for keyword in music_indicators):
+                        score += 100
+                        logger.debug(f"  + Official content bonus (+100)")
+                    
+                    # Strong boost for lyric videos (usually the original song)
+                    if 'lyric' in title_lower or 'lyrics' in title_lower:
+                        score += 80
+                        logger.debug(f"  + Lyric video bonus (+80)")
+                    
+                    # Boost for music-specific terms
+                    if any(term in title_lower for term in ['music', 'song', 'audio', 'single']):
+                        score += 20
+                    
+                    # PENALIZE non-music content that slipped through
+                    non_music_terms = ['tv', 'series', 'episode', 'trailer', 'movie', 'film', 'clip', 'scene', 'adaptation']
+                    if any(term in title_lower for term in non_music_terms):
+                        score -= 100
+                        logger.debug(f"  - Non-music penalty")
+                    
                     if video_id:
+                        # Check for duplicate songs
+                        normalized = normalize_title(entry.get('title', 'Unknown'))
+                        if normalized in seen_songs:
+                            logger.debug(f"Filtered out: {entry.get('title', 'Unknown')} (duplicate song)")
+                            continue
+                        
+                        seen_songs.add(normalized)
                         url = f"https://www.youtube.com/watch?v={video_id}"
-                        results.append({'url': url, 'title': title})
-                        logger.info(f"Found: {title} - {url}")
+                        filtered_results.append({
+                            'url': url, 
+                            'title': entry.get('title', 'Unknown'),
+                            'duration': duration,
+                            'score': score
+                        })
+                        logger.info(f"Found: {entry.get('title', 'Unknown')} ({duration}s, score: {score}) - {url}")
+                    
+                    # Stop when we have enough filtered results
+                    if len(filtered_results) >= max_results * 2:
+                        break
             
-            return results
+            # Sort by score (highest first) to prioritize best matches
+            filtered_results.sort(key=lambda x: x['score'], reverse=True)
+            
+            # For single song searches (!play), take the best match
+            # For playlists, shuffle for variety
+            if max_results == 1:
+                return filtered_results[:1]
+            else:
+                # For playlists, shuffle but keep some top results
+                import random
+                top_results = filtered_results[:max(5, max_results // 3)]  # Keep top 1/3 or at least 5
+                rest = filtered_results[len(top_results):]
+                random.shuffle(rest)
+                return (top_results + rest)[:max_results]
             
         except Exception as e:
             logger.error(f"YouTube search failed for '{query}': {e}", exc_info=True)
@@ -561,8 +829,18 @@ class MusicBot:
         if not self.queue:
             return "The queue is currently empty."
         
-        items = [f"{i+1}. {entry.title}" for i, entry in enumerate(self.queue)]
-        return "**Current Queue:**\n" + "\n".join(items)
+        queue_length = len(self.queue)
+        # Discord message limit is 2000 characters, so we need to paginate for large queues
+        if queue_length <= 20:
+            # Show all songs for small queues
+            items = [f"{i+1}. {entry.title}" for i, entry in enumerate(self.queue)]
+            return f"**Current Queue ({queue_length} songs):**\n" + "\n".join(items)
+        else:
+            # For large queues, show first 15 and last 5
+            items = [f"{i+1}. {entry.title}" for i, entry in enumerate(self.queue[:15])]
+            items.append(f"\n... {queue_length - 20} more songs ...\n")
+            items.extend([f"{i+1}. {entry.title}" for i, entry in enumerate(self.queue[-5:], start=queue_length-4)])
+            return f"**Current Queue ({queue_length} songs total):**\n" + "\n".join(items)
     
     def clear_queue(self):
         """Clear queue and return count."""
@@ -742,8 +1020,7 @@ async def play_audio(ctx, entry):
             else:
                 reason = "force download enabled"
             
-            await ctx.send(f"📥 Downloading **{entry.title}** ({reason})...")
-            
+            # Download silently
             filepath, download_info = await music_bot.download_audio(entry.url, entry.title)
             
             if not filepath:
@@ -773,8 +1050,13 @@ async def play_audio(ctx, entry):
                     data=download_info
                 )
                 voice_client.play(source, after=music_bot.create_after_callback(ctx, filepath))
-                await ctx.send(f"🎵 **Now playing:** {entry.title}")
+                await ctx.send(f"🎵 {entry.title}")
                 logger.info(f"Successfully started playback of downloaded file: {entry.title}")
+                
+                # Start preloading next song in background
+                if music_bot.queue:
+                    asyncio.create_task(music_bot.preload_next_song())
+                
                 return True
             except Exception as play_error:
                 logger.error(f"Failed to play downloaded file {filepath}: {play_error}", exc_info=True)
@@ -790,8 +1072,13 @@ async def play_audio(ctx, entry):
                     data=entry.info
                 )
                 voice_client.play(source, after=music_bot.create_after_callback(ctx))
-                await ctx.send(f"🎵 **Now playing:** {entry.title}")
+                await ctx.send(f"🎵 {entry.title}")
                 logger.info(f"Successfully started playback: {entry.title}")
+                
+                # Start preloading next song in background
+                if music_bot.queue:
+                    asyncio.create_task(music_bot.preload_next_song())
+                
                 return True
             except Exception as stream_error:
                 logger.error(f"Stream playback error for {entry.title}: {stream_error}", exc_info=True)
@@ -958,7 +1245,6 @@ async def play(ctx, *, url):
     
     # Check if it's a search query (not a URL)
     if not url.startswith('http://') and not url.startswith('https://'):
-        await ctx.send(f"🔍 Searching YouTube for: **{url}**...")
         results = await music_bot.search_youtube(url, max_results=1)
         
         if not results:
@@ -967,7 +1253,7 @@ async def play(ctx, *, url):
         
         # Use the first result
         url = results[0]['url']
-        await ctx.send(f"✅ Found: **{results[0]['title']}**")
+        # No message here, will show when playing
     
     # Check for YouTube Music URLs and give friendly reminder
     if 'music.youtube.com' in url:
@@ -1103,7 +1389,7 @@ async def playlist(ctx, *, query: str):
     # Format: "URL" or "URL 30" or "artist name" or "artist name 15"
     parts = query.strip().split()
     url = parts[0] if parts else query
-    max_songs = 20  # default
+    max_songs = 10  # default
     
     # Check if last part is a number (max_songs)
     if len(parts) > 1:
@@ -1118,13 +1404,13 @@ async def playlist(ctx, *, query: str):
     # Validate max_songs
     if max_songs < 1:
         max_songs = 1
-    elif max_songs > 50:
-        max_songs = 50
-        await ctx.send(f"⚠️ Maximum 50 songs allowed, limiting to 50.")
+    elif max_songs > 100:
+        max_songs = 100
+        await ctx.send(f"⚠️ Maximum 100 songs allowed, limiting to 100.")
     
     # Check if it's a search query (not a URL) - search for multiple songs
     if not url.startswith('http://') and not url.startswith('https://'):
-        await ctx.send(f"🔍 Searching YouTube for **{max_songs}** songs by: **{url}**...")
+        # Search silently
         results = await music_bot.search_youtube(url, max_results=max_songs)
         
         if not results:
@@ -1136,6 +1422,16 @@ async def playlist(ctx, *, query: str):
         if not voice_client:
             await join(ctx)
             voice_client = ctx.guild.voice_client
+        
+        # Check if adding would exceed 100 song queue limit
+        current_queue_size = len(music_bot.queue)
+        if current_queue_size + len(results) > 100:
+            allowed = 100 - current_queue_size
+            if allowed <= 0:
+                await ctx.send(f"❌ Queue is full! Maximum 100 songs allowed. Current queue has {current_queue_size} songs.")
+                return
+            results = results[:allowed]
+            await ctx.send(f"⚠️ Queue limit reached. Adding only {allowed} songs to reach the 100 song maximum.")
         
         # Add all search results to queue
         added_count = 0
@@ -1175,14 +1471,22 @@ async def playlist(ctx, *, query: str):
         await join(ctx)
         voice_client = ctx.guild.voice_client
 
-    await ctx.send(f"🎵 Extracting playlist (this may take a moment)...")
-
-    # Extract all songs at once (more reliable than extracting 1 then the rest)
+    # Extract all songs silently
     all_entries = await music_bot.extract_playlist(url, max_songs)
     
     if not all_entries or len(all_entries) == 0:
-        await ctx.send("❌ Could not extract any songs from that playlist. The videos may be unavailable or region-restricted.")
+        await ctx.send("❌ Could not extract songs from playlist")
         return
+    
+    # Check if adding would exceed 100 song queue limit
+    current_queue_size = len(music_bot.queue)
+    if current_queue_size + len(all_entries) > 100:
+        allowed = 100 - current_queue_size
+        if allowed <= 0:
+            await ctx.send(f"❌ Queue is full! Maximum 100 songs allowed. Current queue has {current_queue_size} songs.")
+            return
+        all_entries = all_entries[:allowed]
+        await ctx.send(f"⚠️ Queue limit reached. Adding only {allowed} songs to reach the 100 song maximum.")
     
     # Add all entries to queue
     added_count = 0
@@ -1200,10 +1504,10 @@ async def playlist(ctx, *, query: str):
             continue
     
     if added_count == 0:
-        await ctx.send("❌ Could not add any songs to the queue.")
+        await ctx.send("❌ Could not add songs")
         return
     
-    await ctx.send(f"✅ Added **{added_count}** song(s) to the queue from playlist!")
+    await ctx.send(f"✅ Added {added_count} songs")
     
     # Start playback immediately if idle (but not if paused)
     if not voice_client.is_playing() and not voice_client.is_paused():
@@ -1218,6 +1522,36 @@ async def playlist(ctx, *, query: str):
 @bot.command(name='queue')
 async def show_queue(ctx):
     await ctx.send(music_bot.get_queue_display())
+
+@bot.command(name='remove')
+async def remove_from_queue(ctx, position: int):
+    """Remove a song from the queue by position number.
+    
+    Usage: !remove 5  (removes the 5th song)
+    """
+    try:
+        if not music_bot.queue:
+            await ctx.send("❌ Queue is empty!")
+            return
+        
+        # Convert to 0-based index
+        index = position - 1
+        
+        if index < 0 or index >= len(music_bot.queue):
+            await ctx.send(f"❌ Invalid position! Queue has {len(music_bot.queue)} song(s). Use positions 1-{len(music_bot.queue)}")
+            return
+        
+        # Remove the song
+        removed_entry = music_bot.queue.pop(index)
+        
+        await ctx.send(f"✅ Removed from queue (position {position}):\n**{removed_entry.title}**")
+        logger.info(f"Removed from queue at position {position}: {removed_entry.title}")
+        
+    except ValueError:
+        await ctx.send("❌ Invalid position! Use a number like: `!remove 5`")
+    except Exception as e:
+        logger.error(f"Error in remove command: {e}", exc_info=True)
+        await ctx.send(f"❌ Error removing song: {str(e)}")
 
 @bot.command(name='shuffle')
 async def shuffle_queue(ctx):
