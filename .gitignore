@@ -1,0 +1,26 @@
+# Ignore local environment files
+.env
+# Python cache
+__pycache__/
+*.py[cod]
+# VS Code
+.vscode/
+
+# Discord bot logs
+*.log
+
+# Downloaded music files
+downloads/
+
+# YouTube cookies (contains login session)
+cookies.txt
+
+# Backup files
+*_backup.py
+
+# Test files
+test_*.py
+smoke_test*.py
+_check_*.py
+
+EHBot.txt
