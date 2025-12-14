@@ -534,13 +534,35 @@ class MusicBot:
                         artist_query = artist_query.replace(word, '')
                     artist_query = ' '.join(artist_query.split())
                     
-                    # Check if channel name matches artist name OR any word from query
-                    # This allows finding songs even when searching by song title instead of artist
+                    # Check if channel name matches artist name with stricter matching
                     is_artist_channel = False
                     if artist_query:
-                        query_words = [word for word in artist_query.split() if len(word) > 3]
-                        # Check if any significant word from query appears in channel
-                        is_artist_channel = any(word in uploader or word in channel for word in query_words)
+                        channel_text = (uploader + ' ' + channel).lower()
+                        
+                        # Method 1: Check if full artist name appears in channel (best match)
+                        if artist_query in channel_text:
+                            is_artist_channel = True
+                            logger.debug(f"  ✓ Exact artist match: '{artist_query}' in '{channel_text[:50]}'")
+                        else:
+                            # Method 2: For multi-word artists, require high word overlap
+                            query_words = [word for word in artist_query.split() if len(word) > 3]
+                            if query_words:
+                                words_in_channel = sum(1 for word in query_words if word in channel_text)
+                                match_percentage = words_in_channel / len(query_words) if query_words else 0
+                                
+                                # Stricter: require 75% match for multi-word artists (was 50%)
+                                # Single word artists need exact match
+                                if len(query_words) == 1:
+                                    # Single word: must match exactly (but allow in middle of channel name)
+                                    is_artist_channel = query_words[0] in channel_text
+                                else:
+                                    # Multi-word: need 75%+ match to prevent "Ruby Darkrose" → "Rubi Rose"
+                                    is_artist_channel = match_percentage >= 0.75
+                                    
+                                if is_artist_channel:
+                                    logger.debug(f"  ✓ Partial artist match: {words_in_channel}/{len(query_words)} words ({match_percentage:.0%})")
+                                else:
+                                    logger.debug(f"  ✗ Weak artist match: {words_in_channel}/{len(query_words)} words ({match_percentage:.0%}) in '{channel_text[:50]}'")
                     
                     # Check if this is a song title match (query words appear in video title)
                     title_lower = original_title.lower()
@@ -552,21 +574,36 @@ class MusicBot:
                         if query_words and words_in_title >= len(query_words) * 0.6:
                             title_match = True
                     
-                    # Be lenient: accept if any of these are true
+                    # Accept video if it meets one of these criteria:
+                    # 1. VEVO or Topic channel (highly trusted)
+                    # 2. Artist channel match (channel name matches search)
+                    # 3. Strong title match (80%+ words) - accept even without official indicators
+                    # 4. Good title match (60%+) + has official indicators
                     has_official_indicators = any(indicator in title_lower for indicator in ['official', 'lyric', 'lyrics', 'audio'])
                     
-                    if not (is_vevo or is_topic or is_artist_channel or has_official_indicators or title_match):
-                        logger.debug(f"Filtered out (not official): {original_title[:50]} (channel: {uploader})")
+                    # Calculate title match strength for filtering decision
+                    strong_title_match_for_filter = False
+                    if artist_query:
+                        query_words = [word for word in artist_query.split() if len(word) > 3]
+                        if query_words:
+                            words_in_title = sum(1 for word in query_words if word in title_lower)
+                            match_ratio = words_in_title / len(query_words)
+                            # Strong match: 80%+ of search words in title
+                            strong_title_match_for_filter = match_ratio >= 0.8
+                    
+                    # Accept if: trusted channel OR artist match OR strong title match OR (good title match + official)
+                    if not (is_vevo or is_topic or is_artist_channel or strong_title_match_for_filter or (title_match and has_official_indicators)):
+                        logger.debug(f"Filtered out (not relevant): {original_title[:50]} (channel: {uploader})")
                         continue
                     
                     channel_type = 'VEVO' if is_vevo else ('Topic' if is_topic else ('Artist' if is_artist_channel else 'Other'))
-                    logger.info(f"Found {channel_type} result: {original_title[:50]}...")
+                    logger.info(f"Found {channel_type} result: {original_title[:50]}... (duration: {duration}s)")
                     
 
                     
                     # Basic sanity checks
                     if duration and (duration < 60 or duration > 600):
-                        logger.debug(f"Filtered out: {original_title} (duration: {duration}s)")
+                        logger.info(f"❌ Filtered out: {original_title[:50]} (duration: {duration}s - must be 60-600s)")
                         continue
                     
                     # Filter out promotional/announcement videos (not actual songs)
@@ -591,17 +628,27 @@ class MusicBot:
                         ' amv ', 'amv|', '|amv', 'anime music video',
                         'fan made', 'fanmade', 'fan video', 'mmd', 'animation'
                     ]
-                    if any(phrase in title_lower for phrase in non_song_phrases):
-                        logger.debug(f"Filtered out: {original_title} (non-music content)")
+                    rejected_phrase = next((phrase for phrase in non_song_phrases if phrase in title_lower), None)
+                    if rejected_phrase:
+                        logger.info(f"❌ Filtered out: {original_title[:50]} (contains '{rejected_phrase}')")
                         continue
                     
                     # For artist channels, require proper song format (Artist - Title) or standard music video keywords
+                    # BUT be lenient if the title matches the search query well
                     if is_artist_channel and not is_vevo and not is_topic:
                         has_proper_format = ' - ' in original_title or '"' in original_title
-                        has_music_keywords = any(keyword in title_lower for keyword in ['official music video', 'official video', 'official audio', 'lyrics'])
+                        has_music_keywords = any(keyword in title_lower for keyword in ['official music video', 'official video', 'official audio', 'lyrics', 'lyric'])
                         
-                        if not (has_proper_format or has_music_keywords):
-                            logger.debug(f"Filtered out: {original_title} (artist channel but no song format)")
+                        # Allow if strong title match (50%+ query words in title)
+                        strong_title_match = False
+                        if artist_query:
+                            query_words = [word for word in artist_query.split() if len(word) > 3]
+                            if query_words:
+                                words_in_title = sum(1 for word in query_words if word in title_lower)
+                                strong_title_match = words_in_title >= len(query_words) * 0.5
+                        
+                        if not (has_proper_format or has_music_keywords or strong_title_match):
+                            logger.info(f"❌ Filtered out: {original_title[:50]} (artist channel but no proper song format)")
                             continue
                     
                     # Score: Start with channel type base score
@@ -634,6 +681,15 @@ class MusicBot:
                         elif match_percentage >= 0.5:  # 50-69% match
                             score += 50
                             logger.debug(f"  ~ Partial match: {matching_words}/{len(query_words)} words")
+                    
+                    # HUGE boost if artist name appears in BOTH channel AND title
+                    # This helps ensure we get the right artist (e.g., "Ruby Darkrose" in both places)
+                    if is_artist_channel and artist_query:
+                        # Check if artist appears in title too
+                        artist_in_title = artist_query in title_lower
+                        if artist_in_title:
+                            score += 150
+                            logger.info(f"  ⭐⭐ Artist in channel AND title bonus (+150)")
                     
                     # Extra boost for official music video indicators
                     music_indicators = ['official music video', 'official video', 'official audio', 'official lyric']
@@ -681,20 +737,52 @@ class MusicBot:
             filtered_results.sort(key=lambda x: x['score'], reverse=True)
             
             # For single song searches (!play), take the best match
-            # For playlists, shuffle for variety
+            # For playlists, shuffle for variety to avoid repetition
             if max_results == 1:
                 return filtered_results[:1]
             else:
-                # For playlists, shuffle but keep some top results
+                # For playlists: shuffle top results to avoid always playing the same first song
                 import random
-                top_results = filtered_results[:max(5, max_results // 3)]  # Keep top 1/3 or at least 5
-                rest = filtered_results[len(top_results):]
-                random.shuffle(rest)
-                return (top_results + rest)[:max_results]
+                
+                # Take top results (twice what we need to ensure quality)
+                top_pool = filtered_results[:max_results * 2]
+                
+                # Shuffle them all to get variety
+                random.shuffle(top_pool)
+                
+                return top_pool[:max_results]
             
         except Exception as e:
             logger.error(f"YouTube search failed for '{query}': {e}", exc_info=True)
             return []
+    
+    def normalize_title_for_comparison(self, title):
+        """Normalize title for duplicate detection."""
+        import re
+        title = title.lower()
+        # Remove everything in parentheses and brackets
+        title = re.sub(r'\([^)]*\)', '', title)
+        title = re.sub(r'\[[^\]]*\]', '', title)
+        # Remove common words that don't affect song identity
+        remove_words = ['official', 'music', 'video', 'audio', 'lyric', 'lyrics', 'hd', 'hq', 'remaster', 'remastered']
+        for word in remove_words:
+            title = title.replace(word, '')
+        # Remove common separators and extra info - take last part (song title)
+        parts = re.split(r'[-–—|]', title)
+        # Usually format is "Artist - Song Title", so take the last significant part
+        title = parts[-1] if len(parts) > 1 else parts[0]
+        # Remove extra whitespace
+        title = ' '.join(title.split())
+        return title
+    
+    def is_duplicate_in_queue(self, title):
+        """Check if a song with similar title is already in queue."""
+        normalized_new = self.normalize_title_for_comparison(title)
+        for entry in self.queue:
+            normalized_existing = self.normalize_title_for_comparison(entry.title)
+            if normalized_new == normalized_existing:
+                return True
+        return False
     
     def add_to_queue(self, url, title, requester_id):
         """Add entry to queue."""
@@ -1180,7 +1268,21 @@ async def handle_idle(ctx):
     await asyncio.sleep(IDLE_TIMEOUT)
     voice_client = ctx.guild.voice_client
     if voice_client and not voice_client.is_playing() and not music_bot.queue:
-        await ctx.send("Leaving due to inactivity. Skeet is still fat.")
+        # Random subtle messages
+        import random
+        messages = [
+            "Leaving due to inactivity. Someone should consider portion control. 🍔",
+            "Leaving due to inactivity. The gym membership is still waiting... 💪",
+            "Leaving due to inactivity. Moderation is key, they say. 🍰",
+            "Leaving due to inactivity. Maybe skip seconds next time? 🍕",
+            "Leaving due to inactivity. Salad: it exists. 🥗",
+            "Leaving due to inactivity. The treadmill misses you. 🏃",
+            "Leaving due to inactivity. Someone's been hitting the buffet hard. 🍽️",
+            "Leaving due to inactivity. Those pants aren't going to fit themselves. 👖",
+            "Leaving due to inactivity. The elevator thanks you for your business. 🛗",
+            "Leaving due to inactivity. Remember: sharing is caring. Especially dessert. 🧁"
+        ]
+        await ctx.send(random.choice(messages))
         await leave_voice(ctx)
 
 async def leave_voice(ctx):
@@ -1234,7 +1336,7 @@ async def leave(ctx):
 # BOT COMMANDS - Music Playback
 # ============================================================================
 
-@bot.command(name='play')
+@bot.command(name='play', aliases=['p'])
 async def play(ctx, *, url):
     if await reject_multiple_commands(ctx):
         return
@@ -1312,9 +1414,9 @@ async def play(ctx, *, url):
         await ctx.send(f"✅ Added **{title}** to queue.")
 
 
-@bot.command(name='playnext')
+@bot.command(name='playnext', aliases=['pn'])
 async def playnext(ctx, *, url):
-    """Insert a song to be played next (front of the queue)."""
+    """Insert a song to be played next (front of the queue), or jump to a queue position."""
     if await reject_multiple_commands(ctx):
         return
 
@@ -1327,6 +1429,45 @@ async def playnext(ctx, *, url):
     if not voice_client:
         await join(ctx)
         voice_client = ctx.guild.voice_client
+
+    # Check if url is a number (queue position)
+    if url.strip().isdigit():
+        position = int(url.strip())
+        
+        if not music_bot.queue:
+            await ctx.send("❌ The queue is empty.")
+            return
+        
+        if position < 1 or position > len(music_bot.queue):
+            await ctx.send(f"❌ Invalid position. Queue has {len(music_bot.queue)} songs.")
+            return
+        
+        # Get the song at that position
+        target_song = music_bot.queue[position - 1]
+        
+        # Remove it from its current position
+        music_bot.queue.pop(position - 1)
+        
+        # Insert it at the front
+        music_bot.queue.insert(0, target_song)
+        
+        # Skip current song to play the target
+        if voice_client.is_playing() or voice_client.is_paused():
+            voice_client.stop()
+        
+        await ctx.send(f"⏭️ Skipping to: **{target_song.title}**")
+        return
+    
+    # Check if it's a search query (not a URL)
+    if not url.startswith('http://') and not url.startswith('https://'):
+        results = await music_bot.search_youtube(url, max_results=1)
+        
+        if not results:
+            await ctx.send(f"❌ No results found for: **{url}**")
+            return
+        
+        # Use the first result
+        url = results[0]['url']
 
     await ctx.send("Processing (will play next)...")
 
@@ -1375,7 +1516,7 @@ async def playnext(ctx, *, url):
     else:
         await ctx.send(f"⏭️ Will play next: **{title}**")
 
-@bot.command(name='playlist')
+@bot.command(name='playlist', aliases=['pl'])
 async def playlist(ctx, *, query: str):
     """Add multiple songs from a playlist/radio URL to the queue, or search for songs by artist."""
     if await reject_multiple_commands(ctx):
@@ -1389,7 +1530,7 @@ async def playlist(ctx, *, query: str):
     # Format: "URL" or "URL 30" or "artist name" or "artist name 15"
     parts = query.strip().split()
     url = parts[0] if parts else query
-    max_songs = 10  # default
+    max_songs = None  # Will be set based on URL vs search
     
     # Check if last part is a number (max_songs)
     if len(parts) > 1:
@@ -1401,6 +1542,16 @@ async def playlist(ctx, *, query: str):
             # Not a number, so everything is the url/query
             url = query
     
+    # Determine if it's a URL or search query
+    is_url = url.startswith('http://') or url.startswith('https://')
+    
+    # Set default max_songs based on type if not specified
+    if max_songs is None:
+        if is_url:
+            max_songs = 50  # Default 50 for playlist URLs (get more songs automatically)
+        else:
+            max_songs = 10  # Default 10 for artist searches (more conservative)
+    
     # Validate max_songs
     if max_songs < 1:
         max_songs = 1
@@ -1409,34 +1560,46 @@ async def playlist(ctx, *, query: str):
         await ctx.send(f"⚠️ Maximum 100 songs allowed, limiting to 100.")
     
     # Check if it's a search query (not a URL) - search for multiple songs
-    if not url.startswith('http://') and not url.startswith('https://'):
-        # Search silently
-        results = await music_bot.search_youtube(url, max_results=max_songs)
-        
-        if not results:
-            await ctx.send(f"❌ No results found for: **{url}**")
-            return
-        
+    if not is_url:
         # Join voice if needed
         voice_client = ctx.guild.voice_client
         if not voice_client:
             await join(ctx)
             voice_client = ctx.guild.voice_client
         
-        # Check if adding would exceed 100 song queue limit
+        # Check queue limit
         current_queue_size = len(music_bot.queue)
-        if current_queue_size + len(results) > 100:
-            allowed = 100 - current_queue_size
-            if allowed <= 0:
+        target_songs = max_songs
+        if current_queue_size + target_songs > 100:
+            target_songs = 100 - current_queue_size
+            if target_songs <= 0:
                 await ctx.send(f"❌ Queue is full! Maximum 100 songs allowed. Current queue has {current_queue_size} songs.")
                 return
-            results = results[:allowed]
-            await ctx.send(f"⚠️ Queue limit reached. Adding only {allowed} songs to reach the 100 song maximum.")
+            await ctx.send(f"⚠️ Queue limit reached. Adding only {target_songs} songs to reach the 100 song maximum.")
         
-        # Add all search results to queue
+        # Search with extra results to account for duplicates (fetch 4x what we need)
+        # Higher multiplier helps ensure we get enough good results after filtering
+        results = await music_bot.search_youtube(url, max_results=target_songs * 4)
+        
+        if not results:
+            await ctx.send(f"❌ No results found for: **{url}**")
+            return
+        
+        # Add search results to queue, skipping duplicates until we reach target
         added_count = 0
+        skipped_duplicates = 0
         for result in results:
+            # Stop if we've reached our target
+            if added_count >= target_songs:
+                break
+            
             try:
+                # Check for duplicates before adding
+                if music_bot.is_duplicate_in_queue(result['title']):
+                    logger.info(f"Skipped duplicate: {result['title']}")
+                    skipped_duplicates += 1
+                    continue
+                
                 entry = QueueEntry(
                     url=result['url'],
                     title=result['title'],
@@ -1449,10 +1612,17 @@ async def playlist(ctx, *, query: str):
                 continue
         
         if added_count == 0:
-            await ctx.send("❌ Could not add any songs to the queue.")
+            if skipped_duplicates > 0:
+                await ctx.send(f"❌ All {skipped_duplicates} songs were already in the queue.")
+            else:
+                await ctx.send("❌ Could not add any songs to the queue.")
             return
         
-        await ctx.send(f"✅ Added **{added_count}** song(s) from search results!")
+        # Show summary message
+        message = f"✅ Added **{added_count}** song(s)"
+        if skipped_duplicates > 0:
+            message += f" ({skipped_duplicates} duplicate(s) skipped)"
+        await ctx.send(message)
         
         # Start playback if idle (but not if paused)
         if not voice_client.is_playing() and not voice_client.is_paused():
@@ -1488,10 +1658,17 @@ async def playlist(ctx, *, query: str):
         all_entries = all_entries[:allowed]
         await ctx.send(f"⚠️ Queue limit reached. Adding only {allowed} songs to reach the 100 song maximum.")
     
-    # Add all entries to queue
+    # Add all entries to queue (skip duplicates)
     added_count = 0
+    skipped_duplicates = 0
     for entry_data in all_entries:
         try:
+            # Check for duplicates before adding
+            if music_bot.is_duplicate_in_queue(entry_data['title']):
+                logger.info(f"Skipped duplicate: {entry_data['title']}")
+                skipped_duplicates += 1
+                continue
+            
             entry = QueueEntry(
                 url=entry_data['url'],
                 title=entry_data['title'],
@@ -1504,10 +1681,17 @@ async def playlist(ctx, *, query: str):
             continue
     
     if added_count == 0:
-        await ctx.send("❌ Could not add songs")
+        if skipped_duplicates > 0:
+            await ctx.send(f"❌ All {skipped_duplicates} songs were already in the queue.")
+        else:
+            await ctx.send("❌ Could not add songs")
         return
     
-    await ctx.send(f"✅ Added {added_count} songs")
+    # Show summary message
+    message = f"✅ Added **{added_count}** song(s)"
+    if skipped_duplicates > 0:
+        message += f" ({skipped_duplicates} duplicate(s) skipped)"
+    await ctx.send(message)
     
     # Start playback immediately if idle (but not if paused)
     if not voice_client.is_playing() and not voice_client.is_paused():
@@ -1519,7 +1703,7 @@ async def playlist(ctx, *, query: str):
 # BOT COMMANDS - Queue Management
 # ============================================================================
 
-@bot.command(name='queue')
+@bot.command(name='queue', aliases=['q'])
 async def show_queue(ctx):
     await ctx.send(music_bot.get_queue_display())
 
@@ -1553,7 +1737,7 @@ async def remove_from_queue(ctx, position: int):
         logger.error(f"Error in remove command: {e}", exc_info=True)
         await ctx.send(f"❌ Error removing song: {str(e)}")
 
-@bot.command(name='shuffle')
+@bot.command(name='shuffle', aliases=['s'])
 async def shuffle_queue(ctx):
     """Shuffle the queue when it has more than 10 songs."""
     try:
@@ -1618,12 +1802,27 @@ async def resume(ctx):
 
 @bot.command(name='stop')
 async def stop(ctx):
+    """Stop playback, clear queue, and leave voice channel."""
     voice_client = ctx.guild.voice_client
-    if voice_client and voice_client.is_playing():
+    if not voice_client:
+        await ctx.send("Not connected to a voice channel.")
+        return
+    
+    # Clear the queue
+    queue_count = len(music_bot.queue)
+    music_bot.queue.clear()
+    
+    # Stop playback
+    if voice_client.is_playing() or voice_client.is_paused():
         voice_client.stop()
-        await ctx.send("Stopped.")
+    
+    # Leave voice channel
+    await voice_client.disconnect()
+    
+    if queue_count > 0:
+        await ctx.send(f"⏹️ Stopped playback, cleared {queue_count} song(s), and left voice channel.")
     else:
-        await ctx.send("Nothing is playing.")
+        await ctx.send("⏹️ Stopped playback and left voice channel.")
 
 @bot.command(name='volume')
 async def volume(ctx, value: int):
@@ -1737,39 +1936,39 @@ async def manual_cleanup(ctx, hours: int = 24):
 # BOT COMMANDS - Settings & Configuration
 # ============================================================================
 
-@bot.command(name='fastmode')
-async def toggle_fast_mode(ctx, mode: str = None):
-    """Toggle fast mode for quicker streaming."""
-    global FAST_MODE
-    if mode is None:
-        await ctx.send(f"Fast mode is {'ON' if FAST_MODE else 'OFF'}.")
-        return
-    
-    if mode.lower() in ('on', '1', 'true'):
-        FAST_MODE = True
-        await ctx.send("Fast mode enabled. Prioritizing speed over extraction quality.")
-    elif mode.lower() in ('off', '0', 'false'):
-        FAST_MODE = False
-        await ctx.send("Fast mode disabled. Full extraction enabled.")
-    else:
-        await ctx.send("Use 'on' or 'off'.")
+# @bot.command(name='fastmode')
+# async def toggle_fast_mode(ctx, mode: str = None):
+#     """Toggle fast mode for quicker streaming."""
+#     global FAST_MODE
+#     if mode is None:
+#         await ctx.send(f"Fast mode is {'ON' if FAST_MODE else 'OFF'}.")
+#         return
+#     
+#     if mode.lower() in ('on', '1', 'true'):
+#         FAST_MODE = True
+#         await ctx.send("Fast mode enabled. Prioritizing speed over extraction quality.")
+#     elif mode.lower() in ('off', '0', 'false'):
+#         FAST_MODE = False
+#         await ctx.send("Fast mode disabled. Full extraction enabled.")
+#     else:
+#         await ctx.send("Use 'on' or 'off'.")
 
-@bot.command(name='forcedownload')
-async def toggle_force_download(ctx, mode: str = None):
-    """Toggle force download mode to fix timing issues."""
-    global FORCE_DOWNLOAD
-    if mode is None:
-        await ctx.send(f"Force download is {'ON' if FORCE_DOWNLOAD else 'OFF'}.")
-        return
-    
-    if mode.lower() in ('on', '1', 'true'):
-        FORCE_DOWNLOAD = True
-        await ctx.send("Force download enabled. All tracks will be downloaded for proper timing.")
-    elif mode.lower() in ('off', '0', 'false'):
-        FORCE_DOWNLOAD = False
-        await ctx.send("Force download disabled. Will try streaming when possible.")
-    else:
-        await ctx.send("Use 'on' or 'off'.")
+# @bot.command(name='forcedownload')
+# async def toggle_force_download(ctx, mode: str = None):
+#     """Toggle force download mode to fix timing issues."""
+#     global FORCE_DOWNLOAD
+#     if mode is None:
+#         await ctx.send(f"Force download is {'ON' if FORCE_DOWNLOAD else 'OFF'}.")
+#         return
+#     
+#     if mode.lower() in ('on', '1', 'true'):
+#         FORCE_DOWNLOAD = True
+#         await ctx.send("Force download enabled. All tracks will be downloaded for proper timing.")
+#     elif mode.lower() in ('off', '0', 'false'):
+#         FORCE_DOWNLOAD = False
+#         await ctx.send("Force download disabled. Will try streaming when possible.")
+#     else:
+#         await ctx.send("Use 'on' or 'off'.")
 
 @bot.command(name='debug')
 async def toggle_debug(ctx, mode: str = None):
@@ -1819,44 +2018,44 @@ async def restart_current(ctx):
     await asyncio.sleep(0.5)
     await play_next(ctx)
 
-@bot.command(name='finduser')
-async def find_user(ctx, *, search_term: str = "skeet"):
-    """Debug command to find users by partial name match."""
-    if not DEBUG:
-        await ctx.send("Enable debug mode first with `!debug on`")
-        return
-    
-    matches = []
-    search_lower = search_term.lower()
-    
-    for member in ctx.guild.members:
-        if (search_lower in member.name.lower() or 
-            search_lower in member.display_name.lower()):
-            matches.append(f"**{member.name}** (display: {member.display_name}, id: {member.id})")
-    
-    if matches:
-        await ctx.send(f"Found {len(matches)} matches for '{search_term}':\n" + "\n".join(matches[:10]))
-    else:
-        await ctx.send(f"No matches found for '{search_term}'")
+# @bot.command(name='finduser')
+# async def find_user(ctx, *, search_term: str = "skeet"):
+#     """Debug command to find users by partial name match."""
+#     if not DEBUG:
+#         await ctx.send("Enable debug mode first with `!debug on`")
+#         return
+#     
+#     matches = []
+#     search_lower = search_term.lower()
+#     
+#     for member in ctx.guild.members:
+#         if (search_lower in member.name.lower() or 
+#             search_lower in member.display_name.lower()):
+#             matches.append(f"**{member.name}** (display: {member.display_name}, id: {member.id})")
+#     
+#     if matches:
+#         await ctx.send(f"Found {len(matches)} matches for '{search_term}':\n" + "\n".join(matches[:10]))
+#     else:
+#         await ctx.send(f"No matches found for '{search_term}'")
 
-@bot.command(name='testping')
-async def test_ping(ctx, user_id: int = None):
-    """Test ping by user ID (for debugging)."""
-    if not DEBUG:
-        await ctx.send("Enable debug mode first with `!debug on`")
-        return
-    
-    if user_id:
-        try:
-            user = bot.get_user(user_id) or ctx.guild.get_member(user_id)
-            if user:
-                await ctx.send(f"Test ping: {user.mention}")
-            else:
-                await ctx.send(f"User with ID {user_id} not found")
-        except:
-            await ctx.send(f"Invalid user ID: {user_id}")
-    else:
-        await ctx.send("Usage: `!testping <user_id>` - Use `!finduser` to get user IDs")
+# @bot.command(name='testping')
+# async def test_ping(ctx, user_id: int = None):
+#     """Test ping by user ID (for debugging)."""
+#     if not DEBUG:
+#         await ctx.send("Enable debug mode first with `!debug on`")
+#         return
+#     
+#     if user_id:
+#         try:
+#             user = bot.get_user(user_id) or ctx.guild.get_member(user_id)
+#             if user:
+#                 await ctx.send(f"Test ping: {user.mention}")
+#             else:
+#                 await ctx.send(f"User with ID {user_id} not found")
+#         except:
+#             await ctx.send(f"Invalid user ID: {user_id}")
+#     else:
+#         await ctx.send("Usage: `!testping <user_id>` - Use `!finduser` to get user IDs")
 
 # ============================================================================
 # BOT COMMANDS - Information & Help
@@ -1931,13 +2130,13 @@ async def help_command(ctx, category: str = None):
         
         embed.add_field(
             name="🎶 **Music Commands**",
-            value="`!play <url or search>` - Play a song or search YouTube\n"
-                  "`!playlist <url or artist>` - Add playlist or search for artist songs\n"
-                  "`!playnext <url>` - Insert song to play next\n"
+            value="`!play` / `!p <url or search>` - Play a song or search YouTube\n"
+                  "`!playlist` / `!pl <url or artist>` - Add playlist or search for artist songs\n"
+                  "`!playnext` / `!pn <url/search/number>` - Play next or jump to queue position\n"
                   "`!skip` / `!next` - Skip current song\n"
                   "`!pause` - Pause playback\n"
                   "`!resume` - Resume playback\n"
-                  "`!stop` - Stop playback\n"
+                  "`!stop` - Stop, clear queue, and leave\n"
                   "`!restart` - Restart current song\n"
                   "`!nowplaying` / `!np` - Show current song",
             inline=False
@@ -1945,8 +2144,9 @@ async def help_command(ctx, category: str = None):
         
         embed.add_field(
             name="🎛️ **Queue & Control**",
-            value="`!queue` - Show current queue\n"
-                  "`!shuffle` - Shuffle queue (requires 10+ songs)\n"
+            value="`!queue` / `!q` - Show current queue\n"
+                  "`!shuffle` / `!s` - Shuffle queue (requires 10+ songs)\n"
+                  "`!remove <number>` - Remove song from queue\n"
                   "`!join` - Join your voice channel\n"
                   "`!leave` - Leave voice channel\n"
                   "`!volume <0-100>` - Set volume\n"
@@ -1956,19 +2156,14 @@ async def help_command(ctx, category: str = None):
         
         embed.add_field(
             name="⚙️ **Settings**",
-            value="`!fastmode on/off` - Toggle speed mode\n"
-                  "`!forcedownload on/off` - Toggle download mode\n"
-                  "`!debug on/off` - Toggle debug logging",
+            value="`!debug on/off` - Toggle debug logging",
             inline=False
         )
         
         embed.add_field(
-            name="🔧 **Debug & Utils**",
-            value="`!files` - List downloaded files\n"
-                  "`!cleanup <hours>` - Manual cleanup of old downloads\n"
-                  "`!skeet` - Friend reference command 😄\n"
-                  "`!finduser <name>` - Debug: find user by name\n"
-                  "`!testping <user_id>` - Debug ping by user id",
+            name="🔧 **Utils**",
+            value="`!cleanup <hours>` - Manual cleanup of old downloads\n"
+                  "`!skeet` - Friend reference command 😄",
             inline=False
         )
         
@@ -1990,31 +2185,31 @@ async def help_command(ctx, category: str = None):
         )
         
         embed.add_field(
-            name="`!play <url>`",
-            value="**Play a YouTube or YouTube Music song**\n"
-                  "• Supports YouTube & YouTube Music URLs\n"
-                  "• Extracts single songs from playlists\n"
-                  "• Auto-detects problematic streams\n"
+            name="`!play` / `!p <url or search>`",
+            value="**Play a song from URL or search YouTube**\n"
+                  "• Supports YouTube URLs or text search\n"
+                  "• Smart filtering: prioritizes official music videos\n"
+                  "• Filters out AMVs, fan videos, and non-music content\n"
                   "• Queues if something is already playing",
             inline=False
         )
         
         embed.add_field(
-            name="`!playlist <url>`",
-            value="**Add multiple songs from a playlist**\n"
-                  "• Extracts up to 20 songs by default (plays 1st immediately!)\n"
+            name="`!playlist` / `!pl <url or artist>`",
+            value="**Add multiple songs from playlist or artist search**\n"
+                  "• Default: 10 songs (specify number: `!pl artist 20`)\n"
                   "• YouTube playlists, mixes, radio, & YouTube Music albums ✅\n"
-                  "• First song plays in ~3s, rest load in background\n"
-                  "• Example: `!playlist https://music.youtube.com/playlist?list=...`",
+                  "• Artist search: finds multiple songs by that artist\n"
+                  "• Auto-skips duplicates already in queue",
             inline=False
         )
         
         embed.add_field(
-            name="`!playnext <url>`",
-            value="**Insert a song to play next**\n"
-                  "• Adds song to front of queue\n"
-                  "• Will play after current track finishes\n"
-                  "• Useful for priority requests",
+            name="`!playnext` / `!pn <url/search/number>`",
+            value="**Insert song next OR jump to queue position**\n"
+                  "• With URL/search: adds song to play next\n"
+                  "• With number: jumps to that queue position (e.g., `!pn 5`)\n"
+                  "• Useful for priority requests or quick navigation",
             inline=False
         )
         
@@ -2054,24 +2249,6 @@ async def help_command(ctx, category: str = None):
         )
         
         embed.add_field(
-            name="`!fastmode on/off`",
-            value="**Speed vs Quality Trade-off**\n"
-                  "• **ON**: Quick extraction, faster startup\n"
-                  "• **OFF**: Full extraction, better reliability\n"
-                  "• Default: ON for speed",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="`!forcedownload on/off`",
-            value="**Download vs Stream Method**\n"
-                  "• **ON**: Downloads files locally (starts at 0:00)\n"
-                  "• **OFF**: Streams directly (faster but may skip)\n"
-                  "• Use OFF for speed, ON for timing accuracy",
-            inline=False
-        )
-        
-        embed.add_field(
             name="`!debug on/off`",
             value="**Diagnostic Information**\n"
                   "• **ON**: Detailed logs and error info\n"
@@ -2081,11 +2258,12 @@ async def help_command(ctx, category: str = None):
         )
         
         embed.add_field(
-            name="**Recommended Settings**",
-            value="🚀 **For Speed**: `!fastmode on` + `!forcedownload off`\n"
-                  "🎯 **For Accuracy**: `!fastmode off` + `!forcedownload on`\n"
-                  "⚖️ **Balanced**: `!fastmode on` + `!forcedownload on`\n"
-                  "`!playnext <url>` - Force a song to play next",
+            name="**Bot Configuration**",
+            value="Bot is optimized for speed and reliability with:\n"
+                  "• Smart YouTube search with music-only filtering\n"
+                  "• Background preloading for instant transitions\n"
+                  "• Automatic duplicate detection in playlists\n"
+                  "• Cached extraction for faster performance",
             inline=False
         )
         
@@ -2099,9 +2277,9 @@ async def help_command(ctx, category: str = None):
         
         embed.add_field(
             name="🎵 **Getting Best Performance**",
-            value="• Use `!forcedownload off` for fastest streaming\n"
-                  "• Enable `!fastmode on` for quick queueing\n"
-                  "• Use shorter YouTube URLs when possible\n"
+            value="• Bot is automatically optimized for speed\n"
+                  "• Background preloading makes transitions instant\n"
+                  "• Smart caching reduces repeated extractions\n"
                   "• Join voice channel before using `!play`",
             inline=False
         )
@@ -2109,10 +2287,10 @@ async def help_command(ctx, category: str = None):
         embed.add_field(
             name="🔧 **Troubleshooting**",
             value="• If song starts mid-way: use `!restart`\n"
-                  "• If no audio: check `!status` and `!debug on`\n"
-                  "• If downloads fail: try `!forcedownload off`\n"
-                  "• Use `!files` to see downloaded content\n"
-                  "• Use `!playnext` to force a queued song to play next",
+                  "• If no audio: check `!status` and enable `!debug on`\n"
+                  "• Use `!remove <number>` to remove problematic songs\n"
+                  "• Use `!pn <number>` to jump to a specific queue position\n"
+                  "• Use `!skip` if a song is stuck or not playing",
             inline=False
         )
         
