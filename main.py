@@ -9,6 +9,7 @@
 # IMPORTS
 # ============================================================================
 import asyncio
+import sys
 import discord
 from discord.ext import commands
 import yt_dlp
@@ -56,9 +57,17 @@ Current_volume = 0.1  # Default volume (10%)
 # Discord Bot Token
 TOKEN = os.environ.get('DISCORD_TOKEN', 'YOUR_TOKEN_HERE')
 
+# Welcome Sound Settings (for user 271755277663993856)
+WELCOME_CHANNEL_NAME = "Chillekevineese"  # Channel to monitor for joins
+WELCOME_SOUND_FILE = r"C:\Users\herna\Desktop\HootBot\intros\Erika Intro.mp3"  # Local intro file for specific user
+
 # ============================================================================
 # LOGGING SETUP
 # ============================================================================
+# Reconfigure stderr to UTF-8 so emoji/unicode in log messages don't crash on
+# Windows terminals that default to cp1252 (e.g. the '✅' UnicodeEncodeError).
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 file_handler = RotatingFileHandler('hootsbot.log', maxBytes=5*1024*1024, backupCount=3)
 file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
@@ -70,6 +79,7 @@ logger = logging.getLogger('hootsbot')
 # ============================================================================
 intents = discord.Intents.default()
 intents.message_content = True
+intents.voice_states = True  # Enable voice state tracking
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # ============================================================================
@@ -83,6 +93,7 @@ class QueueEntry:
     title: str
     requester_id: int
     info: Optional[Dict] = None
+    filepath: Optional[str] = None  # Cached download path from preload
 
 # ============================================================================
 # MUSIC BOT CLASS
@@ -186,12 +197,28 @@ class MusicBot:
             ytdl_opts['cookiefile'] = cookies_path
         
         self.ytdl = yt_dlp.YoutubeDL(ytdl_opts)
+        
+        # Pre-built YoutubeDL for search queries (reused across all search_youtube calls)
+        ytdl_search_opts = {
+            'format': 'bestaudio/best/best[ext=m4a]/best[ext=webm]',
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True,   # Just get metadata, no full extraction
+            'skip_download': True,
+            'default_search': 'ytsearch',
+        }
+        if has_cookies:
+            ytdl_search_opts['cookiefile'] = cookies_path
+        self.ytdl_search = yt_dlp.YoutubeDL(ytdl_search_opts)
+        
         self.downloaded_files = set()
         self.locks = {}
-        self.timeout_tasks = {}
-        self.cleanup_task = None
-        self.timeout_tasks = {}
-        self.cleanup_task = None  # Will be started when bot is ready
+        self.timeout_tasks = {}     # Per-guild idle-timeout tasks
+        self.reconnect_tasks = {}   # Per-guild voice reconnect tasks
+        self.last_text_channel = {} # Per-guild last text channel (for reconnect messages)
+        self.cleanup_task = None    # Started when bot is ready
+        self.is_extracting_playlist = False  # Flag to track playlist extraction
+        self.welcome_enabled = {}   # Per-guild welcome sound toggle (default: enabled)
         
     async def start_cleanup_task(self):
         """Start the cleanup task when bot is ready."""
@@ -199,26 +226,31 @@ class MusicBot:
             self.cleanup_task = asyncio.create_task(self.cleanup_old_files())
         
     def get_ffmpeg_options(self, is_file=False):
+        loglevel = 'info' if DEBUG else 'error'
         if is_file:
             # Options for local files - NO seeking, just play naturally from start
             opts = {
                 'before_options': '-nostdin',
-                'options': '-vn -hide_banner -loglevel info'  # Always verbose for debugging
+                'options': f'-vn -hide_banner -loglevel {loglevel}'
             }
         else:
-            # Options for streaming
+            # Options for streaming - 512k buffer reduces audio dropouts vs old 64k
             opts = {
                 'before_options': '-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2',
-                'options': '-vn -hide_banner -loglevel info -bufsize 64k'  # Always verbose
+                'options': f'-vn -hide_banner -loglevel {loglevel} -bufsize 512k'
             }
         return opts
     
     async def extract_info(self, url):
         """Extract video information."""
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             info = await loop.run_in_executor(None, lambda: self.ytdl.extract_info(url, download=False))
             if info:
+                # Check if this is a live stream
+                if info.get('is_live') or info.get('live_status') == 'is_live':
+                    logger.warning(f'Detected live stream, rejecting: {url}')
+                    return None
                 # Simple SABR detection
                 formats = info.get('formats', [])
                 with_url = sum(1 for f in formats if f and f.get('url'))
@@ -243,7 +275,7 @@ class MusicBot:
                 del self.cache_times[url]
         
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             # Use ultra-fast ytdl instance
             info = await loop.run_in_executor(
                 None, 
@@ -251,6 +283,10 @@ class MusicBot:
             )
             
             if info:
+                # Check if this is a live stream
+                if info.get('is_live') or info.get('live_status') == 'is_live':
+                    logger.warning(f'Detected live stream, rejecting: {url}')
+                    return None
                 # Cache it
                 self.info_cache[url] = info
                 self.cache_times[url] = time.time()
@@ -320,7 +356,7 @@ class MusicBot:
         """Download audio for reliable playback from 0:00."""
         try:
             logger.info(f"Starting download for: {title} from {url}")
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             
             # Download with full extraction
             download_info = await loop.run_in_executor(
@@ -408,6 +444,7 @@ class MusicBot:
                 logger.info(f"📥 Pre-downloading: {next_entry.title}")
                 filepath, _ = await self.download_audio(next_entry.url, next_entry.title)
                 if filepath:
+                    next_entry.filepath = filepath  # Cache so play_audio skips re-download
                     logger.info(f"✅ Pre-downloaded ready: {next_entry.title}")
                 else:
                     logger.warning(f"Pre-download failed for: {next_entry.title}")
@@ -456,33 +493,15 @@ class MusicBot:
             query = self.correct_artist_spelling(query)
             
             logger.info(f"Searching YouTube for: {query}")
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             
-            # Use yt-dlp to search YouTube
-            search_opts = {
-                'format': 'bestaudio/best/best[ext=m4a]/best[ext=webm]',
-                'quiet': True,
-                'no_warnings': True,
-                'extract_flat': True,  # Just get URLs, don't extract full info
-                'skip_download': True,
-                'default_search': 'ytsearch',
-            }
-            
-            # Add cookies if available
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            cookies_path = os.path.join(script_dir, 'cookies.txt')
-            if os.path.exists(cookies_path):
-                search_opts['cookiefile'] = cookies_path
-            
-            search_ytdl = yt_dlp.YoutubeDL(search_opts)
-            
-            # Search for more results than needed so we can filter out unwanted content
-            # Hint to YouTube to prefer VEVO/Topic, then we'll strictly filter
-            search_query = f"ytsearch{max_results * 15}:{query} official"  # Get 15x results to filter
+            # Fetch 6x more results than needed for filtering; cap at 60 to avoid huge requests
+            fetch_count = min(max_results * 6, 60)
+            search_query = f"ytsearch{fetch_count}:{query} official"
             
             info = await loop.run_in_executor(
                 None,
-                lambda: search_ytdl.extract_info(search_query, download=False)
+                lambda: self.ytdl_search.extract_info(search_query, download=False)
             )
             
             if not info or 'entries' not in info:
@@ -495,26 +514,21 @@ class MusicBot:
             filtered_results = []
             seen_songs = set()  # Track unique song titles
             
-            import re
-            
             def normalize_title(title):
-                """Extract core song title for deduplication."""
-                # Convert to lowercase first
+                """Extract core song title for deduplication (mirrors normalize_title_for_comparison)."""
                 title = title.lower()
-                # Remove everything in parentheses and brackets
+                # Strip album/playlist label appearing after '|' BEFORE splitting on '-'
+                # so "Artist - Song | Album" → "Artist - Song" not "Album"
+                if '|' in title:
+                    title = title.split('|')[0]
                 title = re.sub(r'\([^)]*\)', '', title)
                 title = re.sub(r'\[[^\]]*\]', '', title)
-                # Remove common words that don't affect song identity
                 remove_words = ['official', 'music', 'video', 'audio', 'lyric', 'lyrics']
                 for word in remove_words:
                     title = title.replace(word, '')
-                # Remove common separators and extra info - take last part (song title)
-                parts = re.split(r'[-–—|]', title)
-                # Usually format is "Artist - Song Title", so take the last significant part
+                parts = re.split(r'[-\u2013\u2014]', title)
                 title = parts[-1] if len(parts) > 1 else parts[0]
-                # Remove extra whitespace
-                title = ' '.join(title.split())
-                return title
+                return ' '.join(title.split())
             
             for entry in info['entries']:
                 if entry:
@@ -757,19 +771,27 @@ class MusicBot:
             return []
     
     def normalize_title_for_comparison(self, title):
-        """Normalize title for duplicate detection."""
-        import re
+        """Normalize title for duplicate detection.
+
+        Handles the common YouTube title format: "Artist - Song Title | Album/Playlist"
+        The album suffix is stripped FIRST so different songs from the same album don't
+        all normalize to the album name and get spuriously flagged as duplicates.
+        """
         title = title.lower()
-        # Remove everything in parentheses and brackets
+        # Strip album/playlist label that appears after '|' BEFORE any other processing.
+        # e.g. "Artist - Song | Album Name" -> "Artist - Song"
+        if '|' in title:
+            title = title.split('|')[0]
+        # Remove everything in parentheses and brackets (e.g. "(Video Oficial)", "[HD]")
         title = re.sub(r'\([^)]*\)', '', title)
         title = re.sub(r'\[[^\]]*\]', '', title)
-        # Remove common words that don't affect song identity
+        # Remove common filler words that don't affect song identity
         remove_words = ['official', 'music', 'video', 'audio', 'lyric', 'lyrics', 'hd', 'hq', 'remaster', 'remastered']
         for word in remove_words:
             title = title.replace(word, '')
-        # Remove common separators and extra info - take last part (song title)
-        parts = re.split(r'[-–—|]', title)
-        # Usually format is "Artist - Song Title", so take the last significant part
+        # Split by artist-title separator (dash variants) and keep the song title part.
+        # Format is usually "Artist - Song Title", so take the last meaningful segment.
+        parts = re.split(r'[-\u2013\u2014]', title)
         title = parts[-1] if len(parts) > 1 else parts[0]
         # Remove extra whitespace
         title = ' '.join(title.split())
@@ -790,12 +812,13 @@ class MusicBot:
         self.queue.append(entry)
         return entry
     
-    async def extract_playlist(self, url, max_items=10):
+    async def extract_playlist(self, url, max_items=15):
         """Extract multiple videos from a playlist/radio URL."""
+        self.is_extracting_playlist = True  # Set flag when starting extraction
         try:
             is_music_youtube = 'music.youtube.com' in url
             logger.info(f"Extracting playlist from: {url} (YouTube Music: {is_music_youtube})")
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             
             # Check if it's a YouTube Mix/Radio (RDEM, RDMM, etc.)
             is_radio = 'list=RD' in url or 'list=RDEM' in url or 'list=RDMM' in url
@@ -911,6 +934,8 @@ class MusicBot:
         except Exception as e:
             logger.error(f'Playlist extraction failed for {url}: {e}', exc_info=True)
             return []
+        finally:
+            self.is_extracting_playlist = False  # Clear flag when extraction completes
     
     def get_queue_display(self):
         """Get formatted queue display."""
@@ -949,7 +974,7 @@ class MusicBot:
             def _remove():
                 if os.path.exists(filepath):
                     os.remove(filepath)
-            await asyncio.get_event_loop().run_in_executor(None, _remove)
+            await asyncio.get_running_loop().run_in_executor(None, _remove)
             self.downloaded_files.discard(filepath)
         except:
             pass
@@ -1053,6 +1078,38 @@ def is_playlist_url(url):
     return False
 
 # ============================================================================
+# CONSTANTS
+# ============================================================================
+
+IDLE_MESSAGES = [
+    "Leaving due to inactivity. Someone should consider portion control. 🍔",
+    "Leaving due to inactivity. The gym membership is still waiting... 💪",
+    "Leaving due to inactivity. Moderation is key, they say. 🍰",
+    "Leaving due to inactivity. Maybe skip seconds next time? 🍕",
+    "Leaving due to inactivity. Salad: it exists. 🥗",
+    "Leaving due to inactivity. The treadmill misses you. 🏃",
+    "Leaving due to inactivity. Someone's been hitting the buffet hard. 🍽️",
+    "Leaving due to inactivity. Those pants aren't going to fit themselves. 👖",
+    "Leaving due to inactivity. The elevator thanks you for your business. 🛗",
+    "Leaving due to inactivity. Remember: sharing is caring. Especially dessert. 🧁",
+    "Leaving due to inactivity. The fridge called. It's scared. 🧊",
+    "Leaving due to inactivity. Your scale filed a restraining order. ⚖️",
+    "Leaving due to inactivity. Diet starts Monday, right? 📅",
+    "Leaving due to inactivity. The all-you-can-eat place is reconsidering their policy. 🍴",
+    "Leaving due to inactivity. Your belt is waving a white flag. 🏳️",
+    "Leaving due to inactivity. Someone discovered the snack drawer again. 🍪",
+    "Leaving due to inactivity. Vegetables are just a suggestion, apparently. 🥦",
+    "Leaving due to inactivity. The couch has a permanent you-shaped dent. 🛋️",
+    "Leaving due to inactivity. Water? Never heard of her. 🥤",
+    "Leaving due to inactivity. Those extra large shirts looking pretty medium now. 👕",
+    "Leaving due to inactivity. The pizza delivery guy knows your order by heart. 🚗",
+    "Leaving due to inactivity. Someone's been training for a hot dog eating contest. 🌭",
+    "Leaving due to inactivity. The stairs vs. elevator debate is no longer a debate. 🎢",
+    "Leaving due to inactivity. Your fitness tracker died of boredom. ⌚",
+    "Leaving due to inactivity. The buffet installed a 'frequent visitor' plaque for you. 🏆"
+]
+
+# ============================================================================
 # PLAYBACK FUNCTIONS
 # ============================================================================
 
@@ -1062,7 +1119,11 @@ async def play_audio(ctx, entry):
     if not voice_client:
         logger.error(f"No voice client for {entry.title}")
         return False
-    
+
+    # Track text channel for reconnect
+    if hasattr(ctx, 'channel') and ctx.channel:
+        music_bot.last_text_channel[ctx.guild.id] = ctx.channel
+
     music_bot.current_track = entry
     
     # Use cached info if available, otherwise extract now (should be rare)
@@ -1108,9 +1169,14 @@ async def play_audio(ctx, entry):
             else:
                 reason = "force download enabled"
             
-            # Download silently
-            filepath, download_info = await music_bot.download_audio(entry.url, entry.title)
-            
+            # Use preloaded file if available, otherwise download now
+            if entry.filepath and os.path.exists(entry.filepath) and os.path.getsize(entry.filepath) >= 1000:
+                filepath = entry.filepath
+                download_info = entry.info
+                logger.info(f"Using pre-downloaded file: {filepath}")
+            else:
+                filepath, download_info = await music_bot.download_audio(entry.url, entry.title)
+
             if not filepath:
                 logger.error(f"Download returned no filepath for {entry.title}")
                 # Check if it's a 403 error
@@ -1141,9 +1207,11 @@ async def play_audio(ctx, entry):
                 await ctx.send(f"🎵 {entry.title}")
                 logger.info(f"Successfully started playback of downloaded file: {entry.title}")
                 
-                # Start preloading next song in background
+                # Cancel any stale preload then kick off the next one
                 if music_bot.queue:
-                    asyncio.create_task(music_bot.preload_next_song())
+                    if music_bot.preload_task and not music_bot.preload_task.done():
+                        music_bot.preload_task.cancel()
+                    music_bot.preload_task = asyncio.create_task(music_bot.preload_next_song())
                 
                 return True
             except Exception as play_error:
@@ -1163,9 +1231,11 @@ async def play_audio(ctx, entry):
                 await ctx.send(f"🎵 {entry.title}")
                 logger.info(f"Successfully started playback: {entry.title}")
                 
-                # Start preloading next song in background
+                # Cancel any stale preload then kick off the next one
                 if music_bot.queue:
-                    asyncio.create_task(music_bot.preload_next_song())
+                    if music_bot.preload_task and not music_bot.preload_task.done():
+                        music_bot.preload_task.cancel()
+                    music_bot.preload_task = asyncio.create_task(music_bot.preload_next_song())
                 
                 return True
             except Exception as stream_error:
@@ -1268,21 +1338,7 @@ async def handle_idle(ctx):
     await asyncio.sleep(IDLE_TIMEOUT)
     voice_client = ctx.guild.voice_client
     if voice_client and not voice_client.is_playing() and not music_bot.queue:
-        # Random subtle messages
-        import random
-        messages = [
-            "Leaving due to inactivity. Someone should consider portion control. 🍔",
-            "Leaving due to inactivity. The gym membership is still waiting... 💪",
-            "Leaving due to inactivity. Moderation is key, they say. 🍰",
-            "Leaving due to inactivity. Maybe skip seconds next time? 🍕",
-            "Leaving due to inactivity. Salad: it exists. 🥗",
-            "Leaving due to inactivity. The treadmill misses you. 🏃",
-            "Leaving due to inactivity. Someone's been hitting the buffet hard. 🍽️",
-            "Leaving due to inactivity. Those pants aren't going to fit themselves. 👖",
-            "Leaving due to inactivity. The elevator thanks you for your business. 🛗",
-            "Leaving due to inactivity. Remember: sharing is caring. Especially dessert. 🧁"
-        ]
-        await ctx.send(random.choice(messages))
+        await ctx.send(random.choice(IDLE_MESSAGES))
         await leave_voice(ctx)
 
 async def leave_voice(ctx):
@@ -1314,13 +1370,23 @@ async def join(ctx):
     if not ctx.author.voice:
         await ctx.send(f'{ctx.author.name} is not connected to a voice channel.')
         return
-    
-    await ctx.author.voice.channel.connect()
-    
-    # Set volume
-    vc = ctx.guild.voice_client
-    if vc and hasattr(vc, 'source') and vc.source:
-        vc.source.volume = Current_volume
+
+    channel = ctx.author.voice.channel
+    voice_client = ctx.guild.voice_client
+
+    try:
+        if voice_client:
+            if voice_client.channel == channel:
+                return  # Already in the right channel, nothing to do
+            await voice_client.move_to(channel)
+        else:
+            await channel.connect()
+    except asyncio.TimeoutError:
+        await ctx.send("❌ Timed out connecting to voice channel. Please try again.")
+        return
+    except discord.ClientException as e:
+        await ctx.send(f"❌ Could not connect to voice channel: {e}")
+        return
 
 @bot.command(name='leave')
 async def leave(ctx):
@@ -1378,7 +1444,7 @@ async def play(ctx, *, url):
     if ULTRA_FAST:
         info = await music_bot.extract_info_fast(url)
         if not info:
-            await ctx.send("❌ Could not extract information.")
+            await ctx.send("❌ Could not extract information. The video may be a live stream, region-restricted, or unavailable.")
             return
         title = info.get('title', 'Unknown')
         # Create entry with cached info for instant playback
@@ -1387,7 +1453,7 @@ async def play(ctx, *, url):
         # Fallback to old method
         if FAST_MODE:
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 info = await loop.run_in_executor(None, lambda: music_bot.ytdl.extract_info(url, download=False, process=False))
                 title = info.get('title', 'Unknown') if info else 'Unknown'
                 entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id)
@@ -1489,7 +1555,7 @@ async def playnext(ctx, *, url):
         # Fallback
         if FAST_MODE:
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 info = await loop.run_in_executor(None, lambda: music_bot.ytdl.extract_info(url, download=False, process=False))
                 title = info.get('title', 'Unknown') if info else 'Unknown'
                 entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id)
@@ -1548,9 +1614,9 @@ async def playlist(ctx, *, query: str):
     # Set default max_songs based on type if not specified
     if max_songs is None:
         if is_url:
-            max_songs = 50  # Default 50 for playlist URLs (get more songs automatically)
+            max_songs = 15  # Default 15 for playlist URLs
         else:
-            max_songs = 10  # Default 10 for artist searches (more conservative)
+            max_songs = 15  # Default 15 for artist searches
     
     # Validate max_songs
     if max_songs < 1:
@@ -1658,6 +1724,10 @@ async def playlist(ctx, *, query: str):
         all_entries = all_entries[:allowed]
         await ctx.send(f"⚠️ Queue limit reached. Adding only {allowed} songs to reach the 100 song maximum.")
     
+    # Track if we should start playback immediately
+    should_start_playback = not voice_client.is_playing() and not voice_client.is_paused()
+    first_song_added = False
+    
     # Add all entries to queue (skip duplicates)
     added_count = 0
     skipped_duplicates = 0
@@ -1676,6 +1746,14 @@ async def playlist(ctx, *, query: str):
             )
             music_bot.queue.append(entry)
             added_count += 1
+            
+            # Start playing the first song immediately if nothing is playing
+            if should_start_playback and not first_song_added:
+                first_song_added = True
+                await play_next(ctx)
+                # Show immediate feedback
+                await ctx.send(f"🎵 Playing first song, loading {len(all_entries) - 1} more...")
+                
         except Exception as e:
             logger.error(f"Failed to queue entry: {e}")
             continue
@@ -1687,15 +1765,16 @@ async def playlist(ctx, *, query: str):
             await ctx.send("❌ Could not add songs")
         return
     
-    # Show summary message
-    message = f"✅ Added **{added_count}** song(s)"
-    if skipped_duplicates > 0:
-        message += f" ({skipped_duplicates} duplicate(s) skipped)"
-    await ctx.send(message)
-    
-    # Start playback immediately if idle (but not if paused)
-    if not voice_client.is_playing() and not voice_client.is_paused():
-        await play_next(ctx)
+    # Show final summary message (only if we didn't already show the "Playing first song" message)
+    if not first_song_added:
+        message = f"✅ Added **{added_count}** song(s)"
+        if skipped_duplicates > 0:
+            message += f" ({skipped_duplicates} duplicate(s) skipped)"
+        await ctx.send(message)
+    else:
+        # Just show final count
+        if skipped_duplicates > 0:
+            await ctx.send(f"✅ Total: {added_count} songs added ({skipped_duplicates} duplicates skipped)")
 
 
 
@@ -1808,10 +1887,12 @@ async def stop(ctx):
         await ctx.send("Not connected to a voice channel.")
         return
     
-    # Clear the queue
+    # Clear the queue and current track so on_voice_state_update
+    # doesn't treat the disconnect as unexpected and schedule a reconnect
     queue_count = len(music_bot.queue)
     music_bot.queue.clear()
-    
+    music_bot.current_track = None
+
     # Stop playback
     if voice_client.is_playing() or voice_client.is_paused():
         voice_client.stop()
@@ -1829,15 +1910,23 @@ async def volume(ctx, value: int):
     if not 0 <= value <= 100:
         await ctx.send("Volume must be between 0-100.")
         return
-    
+
     global Current_volume
     Current_volume = value / 100.0
-    
+
     voice_client = ctx.guild.voice_client
-    if voice_client and hasattr(voice_client, 'source') and voice_client.source:
-        voice_client.source.volume = Current_volume
-    
-    await ctx.send(f"Volume set to {value}%.")
+    applied = False
+    if voice_client and voice_client.source:
+        try:
+            voice_client.source.volume = Current_volume
+            applied = True
+        except Exception as e:
+            logger.warning(f"Could not apply volume to current source: {e}")
+
+    if applied:
+        await ctx.send(f"🔊 Volume set to **{value}%** (applied to current song).")
+    else:
+        await ctx.send(f"🔊 Volume set to **{value}%** (will apply from next song).")
 
 # ============================================================================
 # BOT COMMANDS - File Management
@@ -2106,8 +2195,6 @@ async def quick_commands(ctx):
     embed.add_field(
         name="**Settings**",
         value="`!volume <0-100>`\n"
-              "`!fastmode on/off`\n"
-              "`!forcedownload on/off`\n"
               "`!playnext <url>` - Force a song to play next\n"
               "`!status` - Bot info\n"
               "`!help` - Full help",
@@ -2163,6 +2250,7 @@ async def help_command(ctx, category: str = None):
         embed.add_field(
             name="🔧 **Utils**",
             value="`!cleanup <hours>` - Manual cleanup of old downloads\n"
+                  "`!checkupdates` - Check if dependencies are up to date\n"
                   "`!skeet` - Friend reference command 😄",
             inline=False
         )
@@ -2323,6 +2411,172 @@ async def help_command(ctx, category: str = None):
 # BOT COMMANDS - Fun & Miscellaneous
 # ============================================================================
 
+@bot.command(name='checkupdates')
+async def check_updates(ctx):
+    """Check and automatically update outdated dependencies."""
+    import subprocess
+    import sys
+    import re
+    
+    embed = discord.Embed(
+        title="📦 Checking for Updates",
+        description="Scanning installed packages and FFmpeg...",
+        color=discord.Color.blue()
+    )
+    
+    status_msg = await ctx.send(embed=embed)
+    
+    try:
+        # Check FFmpeg version first
+        ffmpeg_version = "Not installed"
+        ffmpeg_installed = False
+        try:
+            ffmpeg_result = subprocess.run(
+                ['ffmpeg', '-version'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if ffmpeg_result.returncode == 0:
+                # Parse version from output (first line usually has version)
+                first_line = ffmpeg_result.stdout.split('\n')[0]
+                version_match = re.search(r'ffmpeg version ([\d.]+|n[\d.]+)', first_line, re.IGNORECASE)
+                if version_match:
+                    ffmpeg_version = version_match.group(1)
+                    ffmpeg_installed = True
+                else:
+                    ffmpeg_version = "Installed (version unknown)"
+                    ffmpeg_installed = True
+        except FileNotFoundError:
+            ffmpeg_version = "❌ Not found in PATH"
+        except Exception as e:
+            ffmpeg_version = f"❌ Error: {str(e)[:50]}"
+        
+        # Get list of outdated packages
+        result = subprocess.run(
+            [sys.executable, '-m', 'pip', 'list', '--outdated', '--format=json'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode == 0:
+            import json
+            outdated = json.loads(result.stdout)
+            
+            if not outdated:
+                embed = discord.Embed(
+                    title="✅ All Packages Up to Date",
+                    description="All installed packages are current!",
+                    color=discord.Color.green()
+                )
+                
+                # Show FFmpeg status
+                embed.add_field(
+                    name="🎬 FFmpeg",
+                    value=f"`{ffmpeg_version}`" + ("\n⚠️ Install from: https://ffmpeg.org" if not ffmpeg_installed else ""),
+                    inline=False
+                )
+                
+                # Show current versions of core packages
+                version_result = subprocess.run(
+                    [sys.executable, '-m', 'pip', 'show', 'discord.py', 'yt-dlp', 'PyNaCl'],
+                    capture_output=True,
+                    text=True
+                )
+                
+                if version_result.returncode == 0:
+                    lines = version_result.stdout.split('\n')
+                    versions = {}
+                    current_pkg = None
+                    
+                    for line in lines:
+                        if line.startswith('Name:'):
+                            current_pkg = line.split(':', 1)[1].strip()
+                        elif line.startswith('Version:') and current_pkg:
+                            versions[current_pkg] = line.split(':', 1)[1].strip()
+                            current_pkg = None
+                    
+                    for pkg, ver in versions.items():
+                        embed.add_field(name=pkg, value=f"`{ver}`", inline=True)
+                
+                await status_msg.edit(embed=embed)
+                return
+            
+            # Updates available - show what will be updated
+            embed = discord.Embed(
+                title="⚙️ Installing Updates",
+                description=f"Found {len(outdated)} package(s) to update...",
+                color=discord.Color.orange()
+            )
+            
+            # Show FFmpeg status
+            embed.add_field(
+                name="🎬 FFmpeg",
+                value=f"`{ffmpeg_version}`" + ("\n⚠️ Manual install required from: https://ffmpeg.org" if not ffmpeg_installed else ""),
+                inline=False
+            )
+            
+            packages_to_update = []
+            for pkg in outdated:
+                name = pkg['name']
+                current = pkg['version']
+                latest = pkg['latest_version']
+                packages_to_update.append(name)
+                embed.add_field(
+                    name=name,
+                    value=f"`{current}` → `{latest}`",
+                    inline=True
+                )
+            
+            await status_msg.edit(embed=embed)
+            
+            # Update packages
+            update_result = subprocess.run(
+                [sys.executable, '-m', 'pip', 'install', '--upgrade'] + packages_to_update,
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            
+            if update_result.returncode == 0:
+                embed = discord.Embed(
+                    title="✅ Updates Completed",
+                    description=f"Successfully updated {len(packages_to_update)} package(s)!",
+                    color=discord.Color.green()
+                )
+                
+                # Check if critical packages were updated
+                critical = ['discord.py', 'yt-dlp']
+                updated_critical = [p for p in packages_to_update if p.lower() in [c.lower() for c in critical]]
+                
+                if updated_critical:
+                    embed.add_field(
+                        name="⚠️ Restart Required",
+                        value="Critical packages updated. Please restart the bot for changes to take effect.",
+                        inline=False
+                    )
+                
+                embed.set_footer(text=f"Updated: {', '.join(packages_to_update)}")
+            else:
+                embed = discord.Embed(
+                    title="❌ Update Failed",
+                    description="Some packages failed to update.",
+                    color=discord.Color.red()
+                )
+                error_msg = update_result.stderr[:1000] if update_result.stderr else "Unknown error"
+                embed.add_field(name="Error", value=f"```{error_msg}```", inline=False)
+            
+            await status_msg.edit(embed=embed)
+        else:
+            await status_msg.edit(content="❌ Error checking for updates. Make sure pip is working correctly.")
+            
+    except subprocess.TimeoutExpired:
+        await status_msg.edit(content="❌ Update process timed out. Try again later.")
+    except Exception as e:
+        logger.error(f"Error checking updates: {e}")
+        await ctx.send(f"❌ Error checking updates: {str(e)}")
+
 @bot.command(name='skeet')
 async def skeet(ctx):
     """Send a random cat fact with a cute cat image and ping skeetanese."""
@@ -2402,14 +2656,9 @@ async def get_random_cat_fact():
                 if response.status == 200:
                     data = await response.json()
                     return data.get('fact', 'Cats are amazing creatures!')
-                else:
-                    return await get_fallback_cat_fact()
-    except:
-        return await get_fallback_cat_fact()
-
-async def get_fallback_cat_fact():
-    """Return a random cat fact from a local list if API fails."""
-    fallback_facts = [
+    except Exception:
+        pass
+    return random.choice([
         "Cats have over 20 muscles that control their ears.",
         "A group of cats is called a 'clowder'.",
         "Cats can't taste sweetness.",
@@ -2420,26 +2669,23 @@ async def get_fallback_cat_fact():
         "A cat's brain is biologically more similar to a human brain than it is to a dog's.",
         "Cats can run up to 30 mph.",
         "A cat's whiskers are roughly as wide as its body."
-    ]
-    return random.choice(fallback_facts)
+    ])
 
 async def get_random_cat_image():
     """Fetch a random cute cat image from APIs."""
-    # Try multiple cat image APIs for reliability
     image_apis = [
         'https://api.thecatapi.com/v1/images/search',
         'https://cataas.com/cat?json=true',
         'https://aws.random.cat/meow'
     ]
-    
-    for api_url in image_apis:
-        try:
-            async with aiohttp.ClientSession() as session:
+
+    async with aiohttp.ClientSession() as session:
+        for api_url in image_apis:
+            try:
                 async with session.get(api_url, timeout=5) as response:
                     if response.status == 200:
                         data = await response.json()
-                        
-                        # Handle different API response formats
+
                         if api_url.startswith('https://api.thecatapi.com'):
                             if data and len(data) > 0:
                                 return data[0].get('url')
@@ -2449,9 +2695,9 @@ async def get_random_cat_image():
                         elif api_url.startswith('https://aws.random.cat'):
                             if data and 'file' in data:
                                 return data['file']
-        except Exception as e:
-            logger.debug(f"Cat image API {api_url} failed: {e}")
-            continue
+            except Exception as e:
+                logger.debug(f"Cat image API {api_url} failed: {e}")
+                continue
     
     # If all APIs fail, return a fallback image URL
     fallback_images = [
@@ -2460,6 +2706,53 @@ async def get_random_cat_image():
         "https://loremflickr.com/400/300/cat"
     ]
     return random.choice(fallback_images)
+
+# ============================================================================
+# RECONNECT HELPER
+# ============================================================================
+
+async def reconnect_and_resume(guild, channel):
+    """Attempt to reconnect to voice and resume the queue after an unexpected disconnect."""
+    await asyncio.sleep(3)  # Let Discord settle before reconnecting
+
+    try:
+        if not music_bot.queue and not music_bot.current_track:
+            logger.info(f"Nothing to resume after reconnect in {guild.name}")
+            return
+
+        logger.info(f"Attempting voice reconnect in {guild.name} → {channel.name}")
+        await channel.connect()
+        logger.info(f"Reconnected to {channel.name}")
+
+        text_channel = music_bot.last_text_channel.get(guild.id)
+
+        # Re-queue current track at the front so it restarts cleanly
+        if music_bot.current_track:
+            music_bot.queue.insert(0, QueueEntry(
+                url=music_bot.current_track.url,
+                title=music_bot.current_track.title,
+                requester_id=music_bot.current_track.requester_id
+            ))
+            music_bot.current_track = None
+
+        if text_channel:
+            await text_channel.send("🔄 Reconnected to voice channel, resuming playback...")
+
+            class FakeCtx:
+                def __init__(self, guild, channel):
+                    self.guild = guild
+                    self.channel = channel
+                async def send(self, *args, **kwargs):
+                    return await self.channel.send(*args, **kwargs)
+
+            await play_next(FakeCtx(guild, text_channel))
+        else:
+            logger.warning("No text channel stored for reconnect — playback not resumed")
+
+    except asyncio.TimeoutError:
+        logger.error(f"Voice reconnect timed out for {guild.name}")
+    except Exception as e:
+        logger.error(f"Failed to reconnect voice in {guild.name}: {e}")
 
 # ============================================================================
 # BOT EVENTS
@@ -2474,6 +2767,170 @@ async def on_ready():
     # Start cleanup task
     await music_bot.start_cleanup_task()
     logger.info("Started file cleanup task")
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    """Called when a user's voice state changes (join/leave/move)"""
+    # Debug: Log all voice state changes
+    logger.info(f'Voice state update: {member.name} (ID: {member.id}) - Before: {before.channel}, After: {after.channel}')
+    
+    # Handle bot's own voice state changes
+    if member.bot:
+        # Detect unexpected disconnect (was in a channel, now is not)
+        if member == bot.user and before.channel is not None and after.channel is None:
+            guild = before.channel.guild
+            guild_id = guild.id
+            if music_bot.queue or music_bot.current_track:
+                logger.warning(f"Bot unexpectedly disconnected from voice in {guild.name}, scheduling reconnect")
+                if guild_id in music_bot.reconnect_tasks:
+                    music_bot.reconnect_tasks[guild_id].cancel()
+                music_bot.reconnect_tasks[guild_id] = asyncio.create_task(
+                    reconnect_and_resume(guild, before.channel)
+                )
+        return
+    
+    # Only trigger for specific user
+    if member.id != 271755277663993856:
+        logger.debug(f'Ignoring user {member.name} (not target user)')
+        return
+    
+    # Check if welcome sounds are enabled for this guild
+    guild_id = member.guild.id
+    if not music_bot.welcome_enabled.get(guild_id, False):  # Default to disabled
+        logger.info(f'Welcome sounds disabled for guild {guild_id}, skipping intro')
+        return
+    
+    logger.info(f'Target user detected: {member.name} (ID: {member.id})')
+    
+    # Check if user joined the target channel (either from disconnect or from another channel)
+    # They must not have been in the target channel before, but are in it now
+    if after.channel is not None and after.channel.name == WELCOME_CHANNEL_NAME:
+        # Make sure they weren't already in this channel (avoid triggering on mute/unmute etc)
+        if before.channel != after.channel:
+            logger.info(f'{member.name} joined {WELCOME_CHANNEL_NAME}, playing welcome sound')
+            
+            # Get the guild and check if bot is already in a voice channel
+            guild = after.channel.guild
+            voice_client = discord.utils.get(bot.voice_clients, guild=guild)
+            
+            # If bot is not connected, join the channel
+            if voice_client is None:
+                try:
+                    voice_client = await after.channel.connect()
+                    logger.info(f'Connected to {after.channel.name}')
+                except Exception as e:
+                    logger.error(f'Failed to connect to channel: {e}')
+                    return
+            # If bot is in a different channel, move to the welcome channel
+            elif voice_client.channel != after.channel:
+                try:
+                    await voice_client.move_to(after.channel)
+                    logger.info(f'Moved to {after.channel.name}')
+                except Exception as e:
+                    logger.error(f'Failed to move to channel: {e}')
+                    return
+            
+            # Play the welcome sound (interrupt current playback if any)
+            try:
+                # Check if bot was playing something and save the state
+                was_playing = voice_client.is_playing()
+                had_queue = len(music_bot.queue) > 0
+                
+                # Stop current playback if playing (this will NOT clear the queue)
+                if was_playing:
+                    voice_client.stop()
+                    logger.info('Paused current playback for intro')
+                
+                # Play the local intro file with reduced volume (20%)
+                source = discord.FFmpegPCMAudio(WELCOME_SOUND_FILE)
+                source = discord.PCMVolumeTransformer(source, volume=0.20)
+                
+                # Define callback to disconnect after sound finishes
+                async def disconnect_after_intro(error):
+                    try:
+                        if error:
+                            logger.error(f'Error during intro playback: {error}')
+                        logger.info('Welcome sound finished')
+                        
+                        # Resume playback if there was a queue
+                        if had_queue or was_playing:
+                            logger.info('Resuming queue after intro')
+                            # Create a minimal context object for play_next
+                            class FakeContext:
+                                def __init__(self, guild):
+                                    self.guild = guild
+                            
+                            fake_ctx = FakeContext(guild)
+                            await play_next(fake_ctx)
+                            return  # Exit callback - don't disconnect
+                        
+                        # No queue, so proceed with disconnect timer
+                        logger.info('No queue to resume, waiting 30 seconds before disconnect')
+                        await asyncio.sleep(30)
+                        logger.info(f'30 seconds elapsed, checking if still connected...')
+                        
+                        # Check if playlist extraction started during the timer
+                        if music_bot.is_extracting_playlist:
+                            logger.info('Playlist extraction in progress, skipping disconnect')
+                            return
+                        
+                        # Check if queue was populated during the timer
+                        if len(music_bot.queue) > 0:
+                            logger.info('Queue populated during timeout, skipping disconnect')
+                            return
+                        
+                        if voice_client.is_connected():
+                            logger.info('Bot is still connected, proceeding with disconnect')
+                            # Find the specific text channel to send the message
+                            text_channel = discord.utils.get(after.channel.guild.text_channels, name='hootbot-music-spam')
+                            if text_channel:
+                                logger.info(f'Sending leaving message to {text_channel.name}')
+                                await text_channel.send(random.choice(IDLE_MESSAGES))
+                            else:
+                                logger.warning('Could not find hootbot-music-spam channel')
+                            await voice_client.disconnect()
+                            logger.info(f'Successfully disconnected from {after.channel.name} after intro timeout')
+                        else:
+                            logger.info('Bot already disconnected, skipping')
+                    except Exception as ex:
+                        logger.error(f'Exception in disconnect_after_intro callback: {ex}', exc_info=True)
+                
+                # Create task for the callback
+                def sync_callback(error):
+                    asyncio.run_coroutine_threadsafe(disconnect_after_intro(error), bot.loop)
+                
+                voice_client.play(source, after=sync_callback)
+                logger.info(f'Playing intro for {member.name}')
+            except Exception as e:
+                logger.error(f'Failed to play welcome sound: {e}')
+
+# ============================================================================
+# WELCOME SOUND TOGGLE COMMANDS
+# ============================================================================
+
+@bot.command(name='welcomeon', help='Enable welcome sounds when users join the voice channel')
+async def welcome_on(ctx):
+    """Enable welcome sounds for this server"""
+    guild_id = ctx.guild.id
+    music_bot.welcome_enabled[guild_id] = True
+    await ctx.send('✅ Welcome sounds are now **enabled**! 🎵')
+    logger.info(f'Welcome sounds enabled for guild {guild_id}')
+
+@bot.command(name='welcomeoff', help='Disable welcome sounds when users join the voice channel')
+async def welcome_off(ctx):
+    """Disable welcome sounds for this server"""
+    guild_id = ctx.guild.id
+    music_bot.welcome_enabled[guild_id] = False
+    await ctx.send('🔇 Welcome sounds are now **disabled**.')
+    logger.info(f'Welcome sounds disabled for guild {guild_id}')
+
+@bot.command(name='welcomestatus', help='Check if welcome sounds are enabled or disabled')
+async def welcome_status(ctx):
+    """Check the current welcome sound status for this server"""
+    guild_id = ctx.guild.id
+    is_enabled = music_bot.welcome_enabled.get(guild_id, False)  # Default to disabled
+    status = "**enabled** ✅" if is_enabled else "**disabled** 🔇"
+    await ctx.send(f'Welcome sounds are currently {status}')
 
 # ============================================================================
 # MAIN ENTRY POINT
