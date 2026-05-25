@@ -33,6 +33,11 @@ try:
 except ImportError:
     pass
 
+# Ensure Node.js is on PATH so yt-dlp can solve YouTube's n-challenge
+_nodejs_path = r"C:\Program Files\nodejs"
+if _nodejs_path not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = _nodejs_path + os.pathsep + os.environ.get("PATH", "")
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -49,7 +54,7 @@ CACHE_DURATION = 300  # Cache stream URLs for 5 minutes (seconds)
 # Download Settings
 FORCE_DOWNLOAD = True  # Always download to ensure songs start at 0:00 (slower but reliable)
 FORCE_DOWNLOAD_FRAGMENTED = True  # Download fragmented formats to ensure proper start
-DOWNLOAD_FOLDER = r"C:\Users\herna\Desktop\HootBot\downloads"
+DOWNLOAD_FOLDER = r"C:\Users\herna\Desktop\Projectos\HootBot\downloads"
 
 # Audio Settings
 Current_volume = 0.1  # Default volume (10%)
@@ -59,7 +64,7 @@ TOKEN = os.environ.get('DISCORD_TOKEN', 'YOUR_TOKEN_HERE')
 
 # Welcome Sound Settings (for user 271755277663993856)
 WELCOME_CHANNEL_NAME = "Chillekevineese"  # Channel to monitor for joins
-WELCOME_SOUND_FILE = r"C:\Users\herna\Desktop\HootBot\intros\Erika Intro.mp3"  # Local intro file for specific user
+WELCOME_SOUND_FILE = r"C:\Users\herna\Desktop\Projectos\HootBot\intros\Erika Intro.mp3"  # Local intro file for specific user
 
 # ============================================================================
 # LOGGING SETUP
@@ -68,8 +73,11 @@ WELCOME_SOUND_FILE = r"C:\Users\herna\Desktop\HootBot\intros\Erika Intro.mp3"  #
 # Windows terminals that default to cp1252 (e.g. the '✅' UnicodeEncodeError).
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
-file_handler = RotatingFileHandler('hootsbot.log', maxBytes=5*1024*1024, backupCount=3)
+stream_handler = logging.StreamHandler()
+stream_handler.stream = open(stream_handler.stream.fileno(), mode='w', encoding='utf-8', buffering=1)
+stream_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+logging.basicConfig(level=logging.INFO, handlers=[stream_handler])
+file_handler = RotatingFileHandler('hootsbot.log', maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
 file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
 logging.getLogger().addHandler(file_handler)
 logger = logging.getLogger('hootsbot')
@@ -133,7 +141,7 @@ class MusicBot:
         
         # Ultra-fast YT-DL options - absolute minimum extraction
         ytdl_fast_opts = {
-            'format': 'bestaudio/best/best[ext=m4a]/best[ext=webm]',  # More flexible format selection for YouTube Music
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
             'quiet': True,
             'no_warnings': True,
             'skip_download': True,
@@ -144,9 +152,10 @@ class MusicBot:
             'cachedir': False,
             'no_check_certificate': True,
             'playlist_items': '1',
+            'js_runtimes': {'node': {}},
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],  # Use Android client for YouTube Music
+                    'player_client': ['web'],
                 }
             },
             # Add headers to bypass 403 errors
@@ -157,7 +166,7 @@ class MusicBot:
                 'Sec-Fetch-Mode': 'navigate',
             }
         }
-        
+
         # Add cookies if available
         if has_cookies:
             ytdl_fast_opts['cookiefile'] = cookies_path
@@ -166,7 +175,7 @@ class MusicBot:
         
         # Standard options (only used for problematic videos as fallback)
         ytdl_opts = {
-            'format': 'bestaudio/best/best[ext=m4a]/best[ext=webm]',  # More flexible format selection
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
             'quiet': True,
             'no_warnings': True,
             'extractaudio': True,
@@ -178,9 +187,10 @@ class MusicBot:
             'ignore_errors': False,
             'cachedir': False,
             'no_check_certificate': True,
+            'js_runtimes': {'node': {}},
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],
+                    'player_client': ['web'],
                 }
             },
             # Add headers to bypass 403 errors
@@ -191,7 +201,7 @@ class MusicBot:
                 'Sec-Fetch-Mode': 'navigate',
             }
         }
-        
+
         # Add cookies if available
         if has_cookies:
             ytdl_opts['cookiefile'] = cookies_path
@@ -200,12 +210,13 @@ class MusicBot:
         
         # Pre-built YoutubeDL for search queries (reused across all search_youtube calls)
         ytdl_search_opts = {
-            'format': 'bestaudio/best/best[ext=m4a]/best[ext=webm]',
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
             'quiet': True,
             'no_warnings': True,
             'extract_flat': True,   # Just get metadata, no full extraction
             'skip_download': True,
             'default_search': 'ytsearch',
+            'js_runtimes': {'node': {}},
         }
         if has_cookies:
             ytdl_search_opts['cookiefile'] = cookies_path
@@ -214,11 +225,14 @@ class MusicBot:
         self.downloaded_files = set()
         self.locks = {}
         self.timeout_tasks = {}     # Per-guild idle-timeout tasks
+        self.play_next_running = set()  # Per-guild guard against concurrent play_next loops
         self.reconnect_tasks = {}   # Per-guild voice reconnect tasks
         self.last_text_channel = {} # Per-guild last text channel (for reconnect messages)
         self.cleanup_task = None    # Started when bot is ready
         self.is_extracting_playlist = False  # Flag to track playlist extraction
         self.welcome_enabled = {}   # Per-guild welcome sound toggle (default: enabled)
+        self.last_playlist_url = None    # URL of the last loaded playlist
+        self.last_playlist_offset = 0   # How many songs have been loaded from it so far
         
     async def start_cleanup_task(self):
         """Start the cleanup task when bot is ready."""
@@ -812,14 +826,14 @@ class MusicBot:
         self.queue.append(entry)
         return entry
     
-    async def extract_playlist(self, url, max_items=15):
+    async def extract_playlist(self, url, max_items=15, start=1):
         """Extract multiple videos from a playlist/radio URL."""
         self.is_extracting_playlist = True  # Set flag when starting extraction
         try:
             is_music_youtube = 'music.youtube.com' in url
-            logger.info(f"Extracting playlist from: {url} (YouTube Music: {is_music_youtube})")
+            logger.info(f"Extracting playlist from: {url} (YouTube Music: {is_music_youtube}, start={start})")
             loop = asyncio.get_running_loop()
-            
+
             # Check if it's a YouTube Mix/Radio (RDEM, RDMM, etc.)
             is_radio = 'list=RD' in url or 'list=RDEM' in url or 'list=RDMM' in url
             
@@ -835,20 +849,20 @@ class MusicBot:
             
             # Use a playlist-specific yt-dlp instance
             ytdl_opts = {
-                'format': 'bestaudio/best/best[ext=m4a]/best[ext=webm]',  # Flexible format for YouTube Music
+                'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
                 'quiet': not DEBUG,  # Show output in debug mode
                 'no_warnings': not DEBUG,
-                'playliststart': 1,  # Start from the first item
-                'playlistend': max_items,  # Limit to first N items
+                'playliststart': start,
+                'playlistend': start + max_items - 1,
                 'socket_timeout': 15,  # Longer timeout for radio playlists
                 'retries': 3,
                 'cachedir': False,
                 'no_check_certificate': True,
                 'ignoreerrors': True,  # Continue on errors
+                'js_runtimes': {'node': {}},
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['android', 'web'],  # Use Android client to avoid JS runtime issues
-                        'skip': ['hls', 'dash']  # Skip problematic formats
+                        'player_client': ['web'],
                     }
                 },
                 # Add headers to bypass 403 errors
@@ -1113,6 +1127,16 @@ IDLE_MESSAGES = [
 # PLAYBACK FUNCTIONS
 # ============================================================================
 
+async def set_channel_status(guild, status: Optional[str]):
+    """Set (or clear) the bot's voice channel status."""
+    vc = guild.voice_client
+    if not vc:
+        return
+    try:
+        await guild._state.http.edit_voice_channel_status(status, channel_id=vc.channel.id)
+    except Exception as e:
+        logger.debug(f"Could not update channel status: {e}")
+
 async def play_audio(ctx, entry):
     """Play audio for a queue entry - optimized for instant playback."""
     voice_client = ctx.guild.voice_client
@@ -1197,7 +1221,12 @@ async def play_audio(ctx, entry):
                 return False
             
             logger.info(f"Playing downloaded file: {filepath} ({file_size} bytes)")
-            
+
+            voice_client = ctx.guild.voice_client
+            if not voice_client or not voice_client.is_connected():
+                logger.info("Voice client gone after download — bot disconnected, skipping playback")
+                return False
+
             try:
                 source = YTDLSource(
                     discord.FFmpegPCMAudio(filepath, **music_bot.get_ffmpeg_options(is_file=True)),
@@ -1205,6 +1234,7 @@ async def play_audio(ctx, entry):
                 )
                 voice_client.play(source, after=music_bot.create_after_callback(ctx, filepath))
                 await ctx.send(f"🎵 {entry.title}")
+                await set_channel_status(ctx.guild, f"🎵 {entry.title[:100]}")
                 logger.info(f"Successfully started playback of downloaded file: {entry.title}")
                 
                 # Cancel any stale preload then kick off the next one
@@ -1222,6 +1252,12 @@ async def play_audio(ctx, entry):
         # Stream directly (fast path - only if download not needed)
         if stream_url:
             logger.info(f"Streaming from URL: {entry.title}")
+
+            voice_client = ctx.guild.voice_client
+            if not voice_client or not voice_client.is_connected():
+                logger.info("Voice client gone before streaming — bot disconnected, skipping playback")
+                return False
+
             try:
                 source = YTDLSource(
                     discord.FFmpegPCMAudio(stream_url, **music_bot.get_ffmpeg_options(is_file=False)),
@@ -1229,6 +1265,7 @@ async def play_audio(ctx, entry):
                 )
                 voice_client.play(source, after=music_bot.create_after_callback(ctx))
                 await ctx.send(f"🎵 {entry.title}")
+                await set_channel_status(ctx.guild, f"🎵 {entry.title[:100]}")
                 logger.info(f"Successfully started playback: {entry.title}")
                 
                 # Cancel any stale preload then kick off the next one
@@ -1289,10 +1326,26 @@ async def playback_finished(ctx, error, filepath=None):
 async def play_next(ctx):
     """Play next song in queue."""
     guild_id = ctx.guild.id
-    
+
+    # Only one play_next loop per guild at a time. If a loop is already running
+    # it will naturally pick up any newly queued songs.
+    if guild_id in music_bot.play_next_running:
+        return
+    music_bot.play_next_running.add(guild_id)
+
+    try:
+        await _play_next_loop(ctx)
+    finally:
+        music_bot.play_next_running.discard(guild_id)
+
+
+async def _play_next_loop(ctx):
+    """Inner loop — only called from play_next."""
+    guild_id = ctx.guild.id
+
     # Keep trying songs until we find one that works or run out of queue
     failed_songs = []
-    
+
     while True:
         async with await music_bot.get_guild_lock(guild_id):
             # Cancel idle timeout
@@ -1314,22 +1367,39 @@ async def play_next(ctx):
             entry = music_bot.queue.pop(0)
             logger.info(f"Playing next from queue: {entry.title} (Queue size: {len(music_bot.queue)})")
         
+        # Bail out if the bot is no longer in a voice channel (e.g. idle timeout fired)
+        if not ctx.guild.voice_client:
+            logger.info("Voice client gone before playback — bot disconnected, stopping queue")
+            return
+
         # Play outside the lock to avoid deadlock
         success = await play_audio(ctx, entry)
-        
+
         if success:
             if failed_songs:
                 logger.info(f"Successfully playing after skipping {len(failed_songs)} unavailable songs")
             return  # Successfully playing, exit
-        
+
+        # Bail out immediately if the voice client disappeared during play_audio
+        if not ctx.guild.voice_client:
+            logger.info("Voice client lost during playback — bot disconnected, stopping queue")
+            return
+
         # Failed to play - track it and continue
         failed_songs.append(entry.title)
         logger.warning(f"Failed to play {entry.title}, total failed: {len(failed_songs)}")
-        
+
+        # If the voice client is stuck in a playing state, stop it so the next
+        # attempt doesn't get "Already playing audio."
+        vc = ctx.guild.voice_client
+        if vc and (vc.is_playing() or vc.is_paused()):
+            vc.stop()
+            await asyncio.sleep(0.5)
+
         # Only send message every 5 songs to avoid spam
         if len(failed_songs) % 5 == 1:
             await ctx.send(f"⏭️ Skipping unavailable songs... ({len(failed_songs)} skipped so far)")
-        
+
         await asyncio.sleep(0.3)  # Small delay to avoid hammering
         # Continue loop to try next song
 
@@ -1352,12 +1422,17 @@ async def leave_voice(ctx):
     
     count = music_bot.clear_queue()
     
-    # Cancel timeout
+    # Cancel timeout — skip self-cancel when called from inside the idle task itself,
+    # because cancelling the current task raises CancelledError at the next await
+    # and would prevent voice_client.disconnect() from running.
     guild_id = ctx.guild.id
     if guild_id in music_bot.timeout_tasks:
-        music_bot.timeout_tasks[guild_id].cancel()
+        task = music_bot.timeout_tasks[guild_id]
+        if task is not asyncio.current_task():
+            task.cancel()
         del music_bot.timeout_tasks[guild_id]
-    
+
+    await set_channel_status(ctx.guild, None)
     await voice_client.disconnect()
     return count
 
@@ -1374,6 +1449,19 @@ async def join(ctx):
     channel = ctx.author.voice.channel
     voice_client = ctx.guild.voice_client
 
+    # Check permissions before attempting to connect
+    perms = channel.permissions_for(ctx.guild.me)
+    if not perms.connect:
+        msg = f"❌ I don't have permission to **connect** to **{channel.name}**. Please check the channel's role permissions."
+        logger.warning(f"Missing CONNECT permission for channel '{channel.name}' (ID: {channel.id}) in guild '{ctx.guild.name}'")
+        await ctx.send(msg)
+        return
+    if not perms.speak:
+        msg = f"❌ I don't have permission to **speak** in **{channel.name}**. Please check the channel's role permissions."
+        logger.warning(f"Missing SPEAK permission for channel '{channel.name}' (ID: {channel.id}) in guild '{ctx.guild.name}'")
+        await ctx.send(msg)
+        return
+
     try:
         if voice_client:
             if voice_client.channel == channel:
@@ -1382,11 +1470,95 @@ async def join(ctx):
         else:
             await channel.connect()
     except asyncio.TimeoutError:
+        logger.error(f"Timed out connecting to channel '{channel.name}' (ID: {channel.id}) in guild '{ctx.guild.name}'")
         await ctx.send("❌ Timed out connecting to voice channel. Please try again.")
         return
     except discord.ClientException as e:
+        logger.error(f"ClientException connecting to channel '{channel.name}' in guild '{ctx.guild.name}': {e}")
         await ctx.send(f"❌ Could not connect to voice channel: {e}")
         return
+
+@bot.command(name='playfor')
+async def playfor(ctx, *, args: str):
+    """Used by trusted bots: !playfor <channel-name> | <song>. Joins the named channel and plays."""
+    if '|' not in args:
+        await ctx.send("❌ Usage: `!playfor <channel name> | <song>`")
+        return
+    channel_name, query = [part.strip() for part in args.split('|', 1)]
+    print(f"[playfor] Invoked by {ctx.author} (ID: {ctx.author.id}), channel='{channel_name}', query='{query}'", flush=True)
+    logger.info(f"[playfor] Invoked by {ctx.author} (ID: {ctx.author.id}), channel='{channel_name}', query='{query}'")
+    if ctx.author.id not in TRUSTED_BOTS:
+        await ctx.send("❌ This command is only available to trusted bots.")
+        return
+
+    # Find voice channel by name (case-insensitive)
+    channel = discord.utils.find(
+        lambda c: isinstance(c, discord.VoiceChannel) and c.name.lower() == channel_name.lower(),
+        ctx.guild.channels
+    )
+    if not channel:
+        await ctx.send(f"❌ Could not find voice channel: **{channel_name}**")
+        logger.warning(f"[playfor] Channel '{channel_name}' not found in guild '{ctx.guild.name}'")
+        return
+
+    # Permission check
+    perms = channel.permissions_for(ctx.guild.me)
+    if not perms.connect or not perms.speak:
+        await ctx.send(f"❌ Missing connect/speak permissions in **{channel.name}**.")
+        logger.warning(f"[playfor] Missing permissions for channel '{channel.name}'")
+        return
+
+    # Join channel
+    voice_client = ctx.guild.voice_client
+    try:
+        if voice_client:
+            if voice_client.channel != channel:
+                await voice_client.move_to(channel)
+        else:
+            await channel.connect()
+        voice_client = ctx.guild.voice_client
+    except Exception as e:
+        await ctx.send(f"❌ Could not join **{channel.name}**: {e}")
+        logger.error(f"[playfor] Failed to join '{channel.name}': {e}")
+        return
+
+    logger.info(f"[playfor] Joined '{channel.name}', resolving: {query}")
+
+    try:
+        # Resolve search or URL
+        if not query.startswith('http://') and not query.startswith('https://'):
+            logger.info(f"[playfor] Searching YouTube for: {query}")
+            results = await music_bot.search_youtube(query, max_results=1)
+            if not results:
+                await ctx.send(f"❌ No results found for: **{query}**")
+                logger.warning(f"[playfor] No search results for: {query}")
+                return
+            url = results[0]['url']
+            logger.info(f"[playfor] Search resolved to: {url}")
+        else:
+            url = query
+
+        logger.info(f"[playfor] Extracting info for: {url}")
+        info = await music_bot.extract_info_fast(url)
+        if not info:
+            await ctx.send("❌ Could not extract video info.")
+            logger.warning(f"[playfor] extract_info_fast returned None for: {url}")
+            return
+
+        title = info.get('title', 'Unknown')
+        logger.info(f"[playfor] Queuing: {title}")
+        entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id, info=info)
+        music_bot.queue.append(entry)
+    except Exception as e:
+        await ctx.send(f"❌ Error processing request: {e}")
+        logger.error(f"[playfor] Unexpected error: {e}", exc_info=True)
+        return
+
+    if not voice_client.is_playing() and not voice_client.is_paused():
+        await play_next(ctx)
+    else:
+        await ctx.send(f"✅ Added **{title}** to queue.")
+
 
 @bot.command(name='leave')
 async def leave(ctx):
@@ -1433,7 +1605,11 @@ async def play(ctx, *, url):
     if not voice_client:
         await join(ctx)
         voice_client = ctx.guild.voice_client
-    
+
+    if not voice_client:
+        await ctx.send("❌ Could not connect to your voice channel.")
+        return
+
     # Handle playlist URLs - extract specific video
     if is_playlist_url(url):
         video_id = extract_video_id_from_playlist(url)
@@ -1707,6 +1883,10 @@ async def playlist(ctx, *, query: str):
         await join(ctx)
         voice_client = ctx.guild.voice_client
 
+    # Remember this playlist so !more can continue from where we left off
+    music_bot.last_playlist_url = url
+    music_bot.last_playlist_offset = 0
+
     # Extract all songs silently
     all_entries = await music_bot.extract_playlist(url, max_songs)
     
@@ -1764,18 +1944,96 @@ async def playlist(ctx, *, query: str):
         else:
             await ctx.send("❌ Could not add songs")
         return
-    
+
+    # Advance the offset so !more knows where to continue
+    music_bot.last_playlist_offset += len(all_entries)
+
     # Show final summary message (only if we didn't already show the "Playing first song" message)
     if not first_song_added:
         message = f"✅ Added **{added_count}** song(s)"
         if skipped_duplicates > 0:
             message += f" ({skipped_duplicates} duplicate(s) skipped)"
+        message += f" — use `!more` to load the next batch"
         await ctx.send(message)
     else:
         # Just show final count
+        message = f"✅ Total: {added_count} songs added"
         if skipped_duplicates > 0:
-            await ctx.send(f"✅ Total: {added_count} songs added ({skipped_duplicates} duplicates skipped)")
+            message += f" ({skipped_duplicates} duplicates skipped)"
+        message += f" — use `!more` to load the next batch"
+        await ctx.send(message)
 
+
+
+@bot.command(name='more')
+async def more(ctx, max_songs: int = 15):
+    """Load the next batch of songs from the last playlist."""
+    if await reject_multiple_commands(ctx):
+        return
+
+    if not ctx.author.voice:
+        await ctx.send(f'{ctx.author.name} is not connected to a voice channel.')
+        return
+
+    if not music_bot.last_playlist_url:
+        await ctx.send("❌ No playlist loaded yet. Use `!playlist <url>` first.")
+        return
+
+    voice_client = ctx.guild.voice_client
+    if not voice_client:
+        await join(ctx)
+        voice_client = ctx.guild.voice_client
+
+    if max_songs < 1:
+        max_songs = 1
+    elif max_songs > 100:
+        max_songs = 100
+
+    start = music_bot.last_playlist_offset + 1
+    await ctx.send(f"⏳ Loading songs {start}–{start + max_songs - 1} from the playlist...")
+
+    all_entries = await music_bot.extract_playlist(music_bot.last_playlist_url, max_songs, start=start)
+
+    if not all_entries:
+        await ctx.send("❌ No more songs found in the playlist.")
+        return
+
+    current_queue_size = len(music_bot.queue)
+    if current_queue_size + len(all_entries) > 100:
+        allowed = 100 - current_queue_size
+        if allowed <= 0:
+            await ctx.send(f"❌ Queue is full! ({current_queue_size}/100 songs)")
+            return
+        all_entries = all_entries[:allowed]
+        await ctx.send(f"⚠️ Queue limit reached. Adding only {allowed} songs.")
+
+    added_count = 0
+    skipped_duplicates = 0
+    for entry_data in all_entries:
+        if music_bot.is_duplicate_in_queue(entry_data['title']):
+            skipped_duplicates += 1
+            continue
+        music_bot.queue.append(QueueEntry(
+            url=entry_data['url'],
+            title=entry_data['title'],
+            requester_id=ctx.author.id
+        ))
+        added_count += 1
+
+    if added_count == 0:
+        await ctx.send(f"❌ All {skipped_duplicates} songs were already in the queue." if skipped_duplicates else "❌ Could not add any songs.")
+        return
+
+    music_bot.last_playlist_offset += len(all_entries)
+
+    message = f"✅ Added **{added_count}** more song(s)"
+    if skipped_duplicates > 0:
+        message += f" ({skipped_duplicates} duplicate(s) skipped)"
+    message += f" — use `!more` again for the next batch"
+    await ctx.send(message)
+
+    if not voice_client.is_playing() and not voice_client.is_paused():
+        await play_next(ctx)
 
 
 # ============================================================================
@@ -1783,8 +2041,28 @@ async def playlist(ctx, *, query: str):
 # ============================================================================
 
 @bot.command(name='queue', aliases=['q'])
-async def show_queue(ctx):
-    await ctx.send(music_bot.get_queue_display())
+async def show_queue(ctx, arg: str = None):
+    if arg and arg.lower() == 'all':
+        if not music_bot.queue:
+            await ctx.send("The queue is currently empty.")
+            return
+        lines = [f"**Current Queue ({len(music_bot.queue)} songs):**"]
+        for i, entry in enumerate(music_bot.queue):
+            lines.append(f"{i+1}. {entry.title}")
+        # Split into ≤2000-char chunks
+        chunk, chunks = "", []
+        for line in lines:
+            if len(chunk) + len(line) + 1 > 1900:
+                chunks.append(chunk)
+                chunk = line
+            else:
+                chunk = chunk + "\n" + line if chunk else line
+        if chunk:
+            chunks.append(chunk)
+        for chunk in chunks:
+            await ctx.send(chunk)
+    else:
+        await ctx.send(music_bot.get_queue_display())
 
 @bot.command(name='remove')
 async def remove_from_queue(ctx, position: int):
@@ -2757,6 +3035,38 @@ async def reconnect_and_resume(guild, channel):
 # ============================================================================
 # BOT EVENTS
 # ============================================================================
+
+TRUSTED_BOTS = {1489787854925332610}  # OpenClaw bot ID
+BOT_OUTPUT_CHANNEL_ID = 1376414642334601297  # Only channel HootBot sends responses to
+
+class HootContext(commands.Context):
+    """Custom context that redirects all bot responses to the designated output channel."""
+    async def send(self, *args, **kwargs):
+        output_channel = self.bot.get_channel(BOT_OUTPUT_CHANNEL_ID)
+        if output_channel and self.channel.id != BOT_OUTPUT_CHANNEL_ID:
+            return await output_channel.send(*args, **kwargs)
+        return await super().send(*args, **kwargs)
+
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+    if message.author.bot:
+        if message.author.id not in TRUSTED_BOTS:
+            return
+        logger.info(f"[TrustedBot] Message from {message.author} (ID: {message.author.id}): {message.content}")
+    ctx = await bot.get_context(message, cls=HootContext)
+    await bot.invoke(ctx)
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        logger.warning(f"[cmd_error] CommandNotFound: '{ctx.message.content}' from {ctx.author}")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        logger.warning(f"[cmd_error] MissingArgument: '{ctx.message.content}' from {ctx.author} — {error}")
+        await ctx.send(f"❌ Missing argument: `{error.param.name}`")
+    else:
+        logger.error(f"[cmd_error] {type(error).__name__} in '{ctx.message.content}' from {ctx.author}: {error}", exc_info=error)
 
 @bot.event
 async def on_ready():

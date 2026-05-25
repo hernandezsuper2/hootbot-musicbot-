@@ -1,5 +1,6 @@
 python-dotenv
 yt-dlp
 discord.py
-# Optional: PyNaCl for voice support if you plan to use native voice libraries
-# PyNaCl
+aiohttp
+PyNaCl
+davey
