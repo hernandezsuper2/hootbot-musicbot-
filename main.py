@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 # HootBot - Discord Music Bot
 # ============================================================================
 # A high-performance Discord music bot with YouTube integration
@@ -47,7 +47,6 @@ DEBUG = True  # Enable debug logging to diagnose issues
 
 # Performance Settings
 IDLE_TIMEOUT = 30  # Seconds before bot leaves due to inactivity
-FAST_MODE = True  # Optimize for speed over quality
 ULTRA_FAST = True  # Skip all non-essential extraction steps
 CACHE_DURATION = 300  # Cache stream URLs for 5 minutes (seconds)
 
@@ -70,7 +69,7 @@ WELCOME_SOUND_FILE = r"C:\Users\herna\Desktop\Projectos\HootBot\intros\Erika Int
 # LOGGING SETUP
 # ============================================================================
 # Reconfigure stderr to UTF-8 so emoji/unicode in log messages don't crash on
-# Windows terminals that default to cp1252 (e.g. the '✅' UnicodeEncodeError).
+# Windows terminals that default to cp1252 (e.g. the 'âœ…' UnicodeEncodeError).
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 stream_handler = logging.StreamHandler()
@@ -133,10 +132,10 @@ class MusicBot:
         has_cookies = os.path.exists(cookies_path)
         
         if has_cookies:
-            logger.info(f"✅ Found cookies.txt at: {cookies_path}")
+            logger.info(f"âœ… Found cookies.txt at: {cookies_path}")
             logger.info("YouTube Premium/Music features enabled!")
         else:
-            logger.info(f"ℹ️ No cookies.txt found at: {cookies_path}")
+            logger.info(f"â„¹ï¸ No cookies.txt found at: {cookies_path}")
             logger.info("Some YouTube Music content may be restricted")
         
         # Ultra-fast YT-DL options - absolute minimum extraction
@@ -441,7 +440,7 @@ class MusicBot:
                 logger.info(f"Next song already has cached info: {next_entry.title}")
                 return
             
-            logger.info(f"🔄 Preloading next song in background: {next_entry.title}")
+            logger.info(f"ðŸ”„ Preloading next song in background: {next_entry.title}")
             
             # Extract info
             if ULTRA_FAST:
@@ -455,15 +454,15 @@ class MusicBot:
             
             # If FORCE_DOWNLOAD is enabled, also predownload the file
             if FORCE_DOWNLOAD:
-                logger.info(f"📥 Pre-downloading: {next_entry.title}")
+                logger.info(f"ðŸ“¥ Pre-downloading: {next_entry.title}")
                 filepath, _ = await self.download_audio(next_entry.url, next_entry.title)
                 if filepath:
                     next_entry.filepath = filepath  # Cache so play_audio skips re-download
-                    logger.info(f"✅ Pre-downloaded ready: {next_entry.title}")
+                    logger.info(f"âœ… Pre-downloaded ready: {next_entry.title}")
                 else:
                     logger.warning(f"Pre-download failed for: {next_entry.title}")
             else:
-                logger.info(f"✅ Preload complete: {next_entry.title}")
+                logger.info(f"âœ… Preload complete: {next_entry.title}")
                 
         except Exception as e:
             logger.error(f"Error preloading next song: {e}")
@@ -477,17 +476,11 @@ class MusicBot:
             'chapell roan': 'chappell roan',
             'billy eilish': 'billie eilish',
             'bille eilish': 'billie eilish',
-            'taylor swift': 'taylor swift',
             'arianna grande': 'ariana grande',
             'ariana grand': 'ariana grande',
-            'dua lipa': 'dua lipa',
-            'olivia rodrigo': 'olivia rodrigo',
             'olivia rodrigues': 'olivia rodrigo',
-            'sabrina carpenter': 'sabrina carpenter',
             'sabrina carpener': 'sabrina carpenter',
-            'doja cat': 'doja cat',
             'dojacat': 'doja cat',
-            'sza': 'sza',
             's z a': 'sza',
         }
         
@@ -528,22 +521,6 @@ class MusicBot:
             filtered_results = []
             seen_songs = set()  # Track unique song titles
             
-            def normalize_title(title):
-                """Extract core song title for deduplication (mirrors normalize_title_for_comparison)."""
-                title = title.lower()
-                # Strip album/playlist label appearing after '|' BEFORE splitting on '-'
-                # so "Artist - Song | Album" → "Artist - Song" not "Album"
-                if '|' in title:
-                    title = title.split('|')[0]
-                title = re.sub(r'\([^)]*\)', '', title)
-                title = re.sub(r'\[[^\]]*\]', '', title)
-                remove_words = ['official', 'music', 'video', 'audio', 'lyric', 'lyrics']
-                for word in remove_words:
-                    title = title.replace(word, '')
-                parts = re.split(r'[-\u2013\u2014]', title)
-                title = parts[-1] if len(parts) > 1 else parts[0]
-                return ' '.join(title.split())
-            
             for entry in info['entries']:
                 if entry:
                     video_id = entry.get('id')
@@ -561,7 +538,8 @@ class MusicBot:
                     for word in ['official', 'music', 'video', 'audio', 'vevo', 'topic', 'song']:
                         artist_query = artist_query.replace(word, '')
                     artist_query = ' '.join(artist_query.split())
-                    
+                    query_words = [word for word in artist_query.split() if len(word) > 3]
+
                     # Check if channel name matches artist name with stricter matching
                     is_artist_channel = False
                     if artist_query:
@@ -570,10 +548,9 @@ class MusicBot:
                         # Method 1: Check if full artist name appears in channel (best match)
                         if artist_query in channel_text:
                             is_artist_channel = True
-                            logger.debug(f"  ✓ Exact artist match: '{artist_query}' in '{channel_text[:50]}'")
+                            logger.debug(f"  âœ“ Exact artist match: '{artist_query}' in '{channel_text[:50]}'")
                         else:
                             # Method 2: For multi-word artists, require high word overlap
-                            query_words = [word for word in artist_query.split() if len(word) > 3]
                             if query_words:
                                 words_in_channel = sum(1 for word in query_words if word in channel_text)
                                 match_percentage = words_in_channel / len(query_words) if query_words else 0
@@ -584,19 +561,18 @@ class MusicBot:
                                     # Single word: must match exactly (but allow in middle of channel name)
                                     is_artist_channel = query_words[0] in channel_text
                                 else:
-                                    # Multi-word: need 75%+ match to prevent "Ruby Darkrose" → "Rubi Rose"
+                                    # Multi-word: need 75%+ match to prevent "Ruby Darkrose" â†’ "Rubi Rose"
                                     is_artist_channel = match_percentage >= 0.75
                                     
                                 if is_artist_channel:
-                                    logger.debug(f"  ✓ Partial artist match: {words_in_channel}/{len(query_words)} words ({match_percentage:.0%})")
+                                    logger.debug(f"  âœ“ Partial artist match: {words_in_channel}/{len(query_words)} words ({match_percentage:.0%})")
                                 else:
-                                    logger.debug(f"  ✗ Weak artist match: {words_in_channel}/{len(query_words)} words ({match_percentage:.0%}) in '{channel_text[:50]}'")
+                                    logger.debug(f"  âœ— Weak artist match: {words_in_channel}/{len(query_words)} words ({match_percentage:.0%}) in '{channel_text[:50]}'")
                     
                     # Check if this is a song title match (query words appear in video title)
                     title_lower = original_title.lower()
                     title_match = False
                     if artist_query:
-                        query_words = [word for word in artist_query.split() if len(word) > 3]
                         words_in_title = sum(1 for word in query_words if word in title_lower)
                         # If 60%+ of search words appear in title, it's likely the right song
                         if query_words and words_in_title >= len(query_words) * 0.6:
@@ -612,7 +588,6 @@ class MusicBot:
                     # Calculate title match strength for filtering decision
                     strong_title_match_for_filter = False
                     if artist_query:
-                        query_words = [word for word in artist_query.split() if len(word) > 3]
                         if query_words:
                             words_in_title = sum(1 for word in query_words if word in title_lower)
                             match_ratio = words_in_title / len(query_words)
@@ -631,7 +606,7 @@ class MusicBot:
                     
                     # Basic sanity checks
                     if duration and (duration < 60 or duration > 600):
-                        logger.info(f"❌ Filtered out: {original_title[:50]} (duration: {duration}s - must be 60-600s)")
+                        logger.info(f"âŒ Filtered out: {original_title[:50]} (duration: {duration}s - must be 60-600s)")
                         continue
                     
                     # Filter out promotional/announcement videos (not actual songs)
@@ -658,7 +633,7 @@ class MusicBot:
                     ]
                     rejected_phrase = next((phrase for phrase in non_song_phrases if phrase in title_lower), None)
                     if rejected_phrase:
-                        logger.info(f"❌ Filtered out: {original_title[:50]} (contains '{rejected_phrase}')")
+                        logger.info(f"âŒ Filtered out: {original_title[:50]} (contains '{rejected_phrase}')")
                         continue
                     
                     # For artist channels, require proper song format (Artist - Title) or standard music video keywords
@@ -670,13 +645,12 @@ class MusicBot:
                         # Allow if strong title match (50%+ query words in title)
                         strong_title_match = False
                         if artist_query:
-                            query_words = [word for word in artist_query.split() if len(word) > 3]
                             if query_words:
                                 words_in_title = sum(1 for word in query_words if word in title_lower)
                                 strong_title_match = words_in_title >= len(query_words) * 0.5
                         
                         if not (has_proper_format or has_music_keywords or strong_title_match):
-                            logger.info(f"❌ Filtered out: {original_title[:50]} (artist channel but no proper song format)")
+                            logger.info(f"âŒ Filtered out: {original_title[:50]} (artist channel but no proper song format)")
                             continue
                     
                     # Score: Start with channel type base score
@@ -702,10 +676,10 @@ class MusicBot:
                         # HUGE boost for near-perfect matches
                         if match_percentage >= 0.9:  # 90%+ match
                             score += 200
-                            logger.info(f"  ⭐ EXCELLENT match: {matching_words}/{len(query_words)} words")
+                            logger.info(f"  â­ EXCELLENT match: {matching_words}/{len(query_words)} words")
                         elif match_percentage >= 0.7:  # 70-89% match
                             score += 100
-                            logger.info(f"  ✓ Good match: {matching_words}/{len(query_words)} words")
+                            logger.info(f"  âœ“ Good match: {matching_words}/{len(query_words)} words")
                         elif match_percentage >= 0.5:  # 50-69% match
                             score += 50
                             logger.debug(f"  ~ Partial match: {matching_words}/{len(query_words)} words")
@@ -717,7 +691,7 @@ class MusicBot:
                         artist_in_title = artist_query in title_lower
                         if artist_in_title:
                             score += 150
-                            logger.info(f"  ⭐⭐ Artist in channel AND title bonus (+150)")
+                            logger.info(f"  â­â­ Artist in channel AND title bonus (+150)")
                     
                     # Extra boost for official music video indicators
                     music_indicators = ['official music video', 'official video', 'official audio', 'official lyric']
@@ -742,7 +716,7 @@ class MusicBot:
                     
                     if video_id:
                         # Check for duplicate songs
-                        normalized = normalize_title(entry.get('title', 'Unknown'))
+                        normalized = self.normalize_title_for_comparison(entry.get('title', 'Unknown'))
                         if normalized in seen_songs:
                             logger.debug(f"Filtered out: {entry.get('title', 'Unknown')} (duplicate song)")
                             continue
@@ -770,8 +744,6 @@ class MusicBot:
                 return filtered_results[:1]
             else:
                 # For playlists: shuffle top results to avoid always playing the same first song
-                import random
-                
                 # Take top results (twice what we need to ensure quality)
                 top_pool = filtered_results[:max_results * 2]
                 
@@ -1096,31 +1068,31 @@ def is_playlist_url(url):
 # ============================================================================
 
 IDLE_MESSAGES = [
-    "Leaving due to inactivity. Someone should consider portion control. 🍔",
-    "Leaving due to inactivity. The gym membership is still waiting... 💪",
-    "Leaving due to inactivity. Moderation is key, they say. 🍰",
-    "Leaving due to inactivity. Maybe skip seconds next time? 🍕",
-    "Leaving due to inactivity. Salad: it exists. 🥗",
-    "Leaving due to inactivity. The treadmill misses you. 🏃",
-    "Leaving due to inactivity. Someone's been hitting the buffet hard. 🍽️",
-    "Leaving due to inactivity. Those pants aren't going to fit themselves. 👖",
-    "Leaving due to inactivity. The elevator thanks you for your business. 🛗",
-    "Leaving due to inactivity. Remember: sharing is caring. Especially dessert. 🧁",
-    "Leaving due to inactivity. The fridge called. It's scared. 🧊",
-    "Leaving due to inactivity. Your scale filed a restraining order. ⚖️",
-    "Leaving due to inactivity. Diet starts Monday, right? 📅",
-    "Leaving due to inactivity. The all-you-can-eat place is reconsidering their policy. 🍴",
-    "Leaving due to inactivity. Your belt is waving a white flag. 🏳️",
-    "Leaving due to inactivity. Someone discovered the snack drawer again. 🍪",
-    "Leaving due to inactivity. Vegetables are just a suggestion, apparently. 🥦",
-    "Leaving due to inactivity. The couch has a permanent you-shaped dent. 🛋️",
-    "Leaving due to inactivity. Water? Never heard of her. 🥤",
-    "Leaving due to inactivity. Those extra large shirts looking pretty medium now. 👕",
-    "Leaving due to inactivity. The pizza delivery guy knows your order by heart. 🚗",
-    "Leaving due to inactivity. Someone's been training for a hot dog eating contest. 🌭",
-    "Leaving due to inactivity. The stairs vs. elevator debate is no longer a debate. 🎢",
-    "Leaving due to inactivity. Your fitness tracker died of boredom. ⌚",
-    "Leaving due to inactivity. The buffet installed a 'frequent visitor' plaque for you. 🏆"
+    "Leaving due to inactivity. Someone should consider portion control. ðŸ”",
+    "Leaving due to inactivity. The gym membership is still waiting... ðŸ’ª",
+    "Leaving due to inactivity. Moderation is key, they say. ðŸ°",
+    "Leaving due to inactivity. Maybe skip seconds next time? ðŸ•",
+    "Leaving due to inactivity. Salad: it exists. ðŸ¥—",
+    "Leaving due to inactivity. The treadmill misses you. ðŸƒ",
+    "Leaving due to inactivity. Someone's been hitting the buffet hard. ðŸ½ï¸",
+    "Leaving due to inactivity. Those pants aren't going to fit themselves. ðŸ‘–",
+    "Leaving due to inactivity. The elevator thanks you for your business. ðŸ›—",
+    "Leaving due to inactivity. Remember: sharing is caring. Especially dessert. ðŸ§",
+    "Leaving due to inactivity. The fridge called. It's scared. ðŸ§Š",
+    "Leaving due to inactivity. Your scale filed a restraining order. âš–ï¸",
+    "Leaving due to inactivity. Diet starts Monday, right? ðŸ“…",
+    "Leaving due to inactivity. The all-you-can-eat place is reconsidering their policy. ðŸ´",
+    "Leaving due to inactivity. Your belt is waving a white flag. ðŸ³ï¸",
+    "Leaving due to inactivity. Someone discovered the snack drawer again. ðŸª",
+    "Leaving due to inactivity. Vegetables are just a suggestion, apparently. ðŸ¥¦",
+    "Leaving due to inactivity. The couch has a permanent you-shaped dent. ðŸ›‹ï¸",
+    "Leaving due to inactivity. Water? Never heard of her. ðŸ¥¤",
+    "Leaving due to inactivity. Those extra large shirts looking pretty medium now. ðŸ‘•",
+    "Leaving due to inactivity. The pizza delivery guy knows your order by heart. ðŸš—",
+    "Leaving due to inactivity. Someone's been training for a hot dog eating contest. ðŸŒ­",
+    "Leaving due to inactivity. The stairs vs. elevator debate is no longer a debate. ðŸŽ¢",
+    "Leaving due to inactivity. Your fitness tracker died of boredom. âŒš",
+    "Leaving due to inactivity. The buffet installed a 'frequent visitor' plaque for you. ðŸ†"
 ]
 
 # ============================================================================
@@ -1136,6 +1108,13 @@ async def set_channel_status(guild, status: Optional[str]):
         await guild._state.http.edit_voice_channel_status(status, channel_id=vc.channel.id)
     except Exception as e:
         logger.debug(f"Could not update channel status: {e}")
+
+def _kick_preload():
+    """Cancel any stale preload task and start a fresh one for the next song."""
+    if music_bot.queue:
+        if music_bot.preload_task and not music_bot.preload_task.done():
+            music_bot.preload_task.cancel()
+        music_bot.preload_task = asyncio.create_task(music_bot.preload_next_song())
 
 async def play_audio(ctx, entry):
     """Play audio for a queue entry - optimized for instant playback."""
@@ -1162,7 +1141,7 @@ async def play_audio(ctx, entry):
     
     if not entry.info:
         logger.error(f"Failed to extract info for: {entry.title}")
-        await ctx.send(f"❌ **{entry.title}** is unavailable (may be region-restricted, private, or deleted)")
+        await ctx.send(f"âŒ **{entry.title}** is unavailable (may be region-restricted, private, or deleted)")
         return False
     
     # Get stream URL - prioritize instant streaming
@@ -1204,27 +1183,27 @@ async def play_audio(ctx, entry):
             if not filepath:
                 logger.error(f"Download returned no filepath for {entry.title}")
                 # Check if it's a 403 error
-                await ctx.send(f"❌ Download failed for **{entry.title}**\n"
-                              f"💡 If you see '403 Forbidden' errors, YouTube may be blocking requests.\n"
+                await ctx.send(f"âŒ Download failed for **{entry.title}**\n"
+                              f"ðŸ’¡ If you see '403 Forbidden' errors, YouTube may be blocking requests.\n"
                               f"Try updating yt-dlp: `pip install -U yt-dlp`")
                 return False
             
             if not os.path.exists(filepath):
                 logger.error(f"Downloaded file does not exist: {filepath}")
-                await ctx.send(f"❌ Downloaded file not found for **{entry.title}**")
+                await ctx.send(f"âŒ Downloaded file not found for **{entry.title}**")
                 return False
             
             file_size = os.path.getsize(filepath)
             if file_size < 1000:
                 logger.error(f"Downloaded file too small: {file_size} bytes")
-                await ctx.send(f"❌ Downloaded file corrupted for **{entry.title}**")
+                await ctx.send(f"âŒ Downloaded file corrupted for **{entry.title}**")
                 return False
             
             logger.info(f"Playing downloaded file: {filepath} ({file_size} bytes)")
 
             voice_client = ctx.guild.voice_client
             if not voice_client or not voice_client.is_connected():
-                logger.info("Voice client gone after download — bot disconnected, skipping playback")
+                logger.info("Voice client gone after download â€” bot disconnected, skipping playback")
                 return False
 
             try:
@@ -1233,20 +1212,14 @@ async def play_audio(ctx, entry):
                     data=download_info
                 )
                 voice_client.play(source, after=music_bot.create_after_callback(ctx, filepath))
-                await ctx.send(f"🎵 {entry.title}")
-                await set_channel_status(ctx.guild, f"🎵 {entry.title[:100]}")
+                await ctx.send(f"ðŸŽµ {entry.title}")
+                await set_channel_status(ctx.guild, f"ðŸŽµ {entry.title[:100]}")
                 logger.info(f"Successfully started playback of downloaded file: {entry.title}")
-                
-                # Cancel any stale preload then kick off the next one
-                if music_bot.queue:
-                    if music_bot.preload_task and not music_bot.preload_task.done():
-                        music_bot.preload_task.cancel()
-                    music_bot.preload_task = asyncio.create_task(music_bot.preload_next_song())
-                
+                _kick_preload()
                 return True
             except Exception as play_error:
                 logger.error(f"Failed to play downloaded file {filepath}: {play_error}", exc_info=True)
-                await ctx.send(f"❌ Failed to play downloaded file for **{entry.title}**")
+                await ctx.send(f"âŒ Failed to play downloaded file for **{entry.title}**")
                 return False
         
         # Stream directly (fast path - only if download not needed)
@@ -1255,7 +1228,7 @@ async def play_audio(ctx, entry):
 
             voice_client = ctx.guild.voice_client
             if not voice_client or not voice_client.is_connected():
-                logger.info("Voice client gone before streaming — bot disconnected, skipping playback")
+                logger.info("Voice client gone before streaming â€” bot disconnected, skipping playback")
                 return False
 
             try:
@@ -1264,28 +1237,22 @@ async def play_audio(ctx, entry):
                     data=entry.info
                 )
                 voice_client.play(source, after=music_bot.create_after_callback(ctx))
-                await ctx.send(f"🎵 {entry.title}")
-                await set_channel_status(ctx.guild, f"🎵 {entry.title[:100]}")
+                await ctx.send(f"ðŸŽµ {entry.title}")
+                await set_channel_status(ctx.guild, f"ðŸŽµ {entry.title[:100]}")
                 logger.info(f"Successfully started playback: {entry.title}")
-                
-                # Cancel any stale preload then kick off the next one
-                if music_bot.queue:
-                    if music_bot.preload_task and not music_bot.preload_task.done():
-                        music_bot.preload_task.cancel()
-                    music_bot.preload_task = asyncio.create_task(music_bot.preload_next_song())
-                
+                _kick_preload()
                 return True
             except Exception as stream_error:
                 logger.error(f"Stream playback error for {entry.title}: {stream_error}", exc_info=True)
-                await ctx.send(f"❌ Stream error for **{entry.title}**: {str(stream_error)}")
+                await ctx.send(f"âŒ Stream error for **{entry.title}**: {str(stream_error)}")
                 return False
         else:
             logger.error(f"No playable stream found for: {entry.title}")
-            await ctx.send(f"❌ No playable stream found for **{entry.title}**")
+            await ctx.send(f"âŒ No playable stream found for **{entry.title}**")
             return False
     except Exception as e:
         logger.error(f"Playback failed for {entry.title}: {e}", exc_info=True)
-        await ctx.send(f"❌ Playback failed for **{entry.title}**: {str(e)}")
+        await ctx.send(f"âŒ Playback failed for **{entry.title}**: {str(e)}")
     
     return False
 
@@ -1340,7 +1307,7 @@ async def play_next(ctx):
 
 
 async def _play_next_loop(ctx):
-    """Inner loop — only called from play_next."""
+    """Inner loop â€” only called from play_next."""
     guild_id = ctx.guild.id
 
     # Keep trying songs until we find one that works or run out of queue
@@ -1357,7 +1324,7 @@ async def _play_next_loop(ctx):
             if not music_bot.queue:
                 if failed_songs:
                     logger.info(f"Queue empty after trying {len(failed_songs)} unavailable songs")
-                    await ctx.send(f"❌ All songs in queue ({len(failed_songs)}) were unavailable or region-restricted.")
+                    await ctx.send(f"âŒ All songs in queue ({len(failed_songs)}) were unavailable or region-restricted.")
                 else:
                     logger.info("Queue is empty, starting idle timeout")
                 # Start idle timeout
@@ -1369,7 +1336,7 @@ async def _play_next_loop(ctx):
         
         # Bail out if the bot is no longer in a voice channel (e.g. idle timeout fired)
         if not ctx.guild.voice_client:
-            logger.info("Voice client gone before playback — bot disconnected, stopping queue")
+            logger.info("Voice client gone before playback â€” bot disconnected, stopping queue")
             return
 
         # Play outside the lock to avoid deadlock
@@ -1382,7 +1349,7 @@ async def _play_next_loop(ctx):
 
         # Bail out immediately if the voice client disappeared during play_audio
         if not ctx.guild.voice_client:
-            logger.info("Voice client lost during playback — bot disconnected, stopping queue")
+            logger.info("Voice client lost during playback â€” bot disconnected, stopping queue")
             return
 
         # Failed to play - track it and continue
@@ -1398,7 +1365,7 @@ async def _play_next_loop(ctx):
 
         # Only send message every 5 songs to avoid spam
         if len(failed_songs) % 5 == 1:
-            await ctx.send(f"⏭️ Skipping unavailable songs... ({len(failed_songs)} skipped so far)")
+            await ctx.send(f"â­ï¸ Skipping unavailable songs... ({len(failed_songs)} skipped so far)")
 
         await asyncio.sleep(0.3)  # Small delay to avoid hammering
         # Continue loop to try next song
@@ -1422,7 +1389,7 @@ async def leave_voice(ctx):
     
     count = music_bot.clear_queue()
     
-    # Cancel timeout — skip self-cancel when called from inside the idle task itself,
+    # Cancel timeout â€” skip self-cancel when called from inside the idle task itself,
     # because cancelling the current task raises CancelledError at the next await
     # and would prevent voice_client.disconnect() from running.
     guild_id = ctx.guild.id
@@ -1452,12 +1419,12 @@ async def join(ctx):
     # Check permissions before attempting to connect
     perms = channel.permissions_for(ctx.guild.me)
     if not perms.connect:
-        msg = f"❌ I don't have permission to **connect** to **{channel.name}**. Please check the channel's role permissions."
+        msg = f"âŒ I don't have permission to **connect** to **{channel.name}**. Please check the channel's role permissions."
         logger.warning(f"Missing CONNECT permission for channel '{channel.name}' (ID: {channel.id}) in guild '{ctx.guild.name}'")
         await ctx.send(msg)
         return
     if not perms.speak:
-        msg = f"❌ I don't have permission to **speak** in **{channel.name}**. Please check the channel's role permissions."
+        msg = f"âŒ I don't have permission to **speak** in **{channel.name}**. Please check the channel's role permissions."
         logger.warning(f"Missing SPEAK permission for channel '{channel.name}' (ID: {channel.id}) in guild '{ctx.guild.name}'")
         await ctx.send(msg)
         return
@@ -1471,24 +1438,24 @@ async def join(ctx):
             await channel.connect()
     except asyncio.TimeoutError:
         logger.error(f"Timed out connecting to channel '{channel.name}' (ID: {channel.id}) in guild '{ctx.guild.name}'")
-        await ctx.send("❌ Timed out connecting to voice channel. Please try again.")
+        await ctx.send("âŒ Timed out connecting to voice channel. Please try again.")
         return
     except discord.ClientException as e:
         logger.error(f"ClientException connecting to channel '{channel.name}' in guild '{ctx.guild.name}': {e}")
-        await ctx.send(f"❌ Could not connect to voice channel: {e}")
+        await ctx.send(f"âŒ Could not connect to voice channel: {e}")
         return
 
 @bot.command(name='playfor')
 async def playfor(ctx, *, args: str):
     """Used by trusted bots: !playfor <channel-name> | <song>. Joins the named channel and plays."""
     if '|' not in args:
-        await ctx.send("❌ Usage: `!playfor <channel name> | <song>`")
+        await ctx.send("âŒ Usage: `!playfor <channel name> | <song>`")
         return
     channel_name, query = [part.strip() for part in args.split('|', 1)]
     print(f"[playfor] Invoked by {ctx.author} (ID: {ctx.author.id}), channel='{channel_name}', query='{query}'", flush=True)
     logger.info(f"[playfor] Invoked by {ctx.author} (ID: {ctx.author.id}), channel='{channel_name}', query='{query}'")
     if ctx.author.id not in TRUSTED_BOTS:
-        await ctx.send("❌ This command is only available to trusted bots.")
+        await ctx.send("âŒ This command is only available to trusted bots.")
         return
 
     # Find voice channel by name (case-insensitive)
@@ -1497,14 +1464,14 @@ async def playfor(ctx, *, args: str):
         ctx.guild.channels
     )
     if not channel:
-        await ctx.send(f"❌ Could not find voice channel: **{channel_name}**")
+        await ctx.send(f"âŒ Could not find voice channel: **{channel_name}**")
         logger.warning(f"[playfor] Channel '{channel_name}' not found in guild '{ctx.guild.name}'")
         return
 
     # Permission check
     perms = channel.permissions_for(ctx.guild.me)
     if not perms.connect or not perms.speak:
-        await ctx.send(f"❌ Missing connect/speak permissions in **{channel.name}**.")
+        await ctx.send(f"âŒ Missing connect/speak permissions in **{channel.name}**.")
         logger.warning(f"[playfor] Missing permissions for channel '{channel.name}'")
         return
 
@@ -1518,7 +1485,7 @@ async def playfor(ctx, *, args: str):
             await channel.connect()
         voice_client = ctx.guild.voice_client
     except Exception as e:
-        await ctx.send(f"❌ Could not join **{channel.name}**: {e}")
+        await ctx.send(f"âŒ Could not join **{channel.name}**: {e}")
         logger.error(f"[playfor] Failed to join '{channel.name}': {e}")
         return
 
@@ -1530,7 +1497,7 @@ async def playfor(ctx, *, args: str):
             logger.info(f"[playfor] Searching YouTube for: {query}")
             results = await music_bot.search_youtube(query, max_results=1)
             if not results:
-                await ctx.send(f"❌ No results found for: **{query}**")
+                await ctx.send(f"âŒ No results found for: **{query}**")
                 logger.warning(f"[playfor] No search results for: {query}")
                 return
             url = results[0]['url']
@@ -1541,7 +1508,7 @@ async def playfor(ctx, *, args: str):
         logger.info(f"[playfor] Extracting info for: {url}")
         info = await music_bot.extract_info_fast(url)
         if not info:
-            await ctx.send("❌ Could not extract video info.")
+            await ctx.send("âŒ Could not extract video info.")
             logger.warning(f"[playfor] extract_info_fast returned None for: {url}")
             return
 
@@ -1550,14 +1517,14 @@ async def playfor(ctx, *, args: str):
         entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id, info=info)
         music_bot.queue.append(entry)
     except Exception as e:
-        await ctx.send(f"❌ Error processing request: {e}")
+        await ctx.send(f"âŒ Error processing request: {e}")
         logger.error(f"[playfor] Unexpected error: {e}", exc_info=True)
         return
 
     if not voice_client.is_playing() and not voice_client.is_paused():
         await play_next(ctx)
     else:
-        await ctx.send(f"✅ Added **{title}** to queue.")
+        await ctx.send(f"âœ… Added **{title}** to queue.")
 
 
 @bot.command(name='leave')
@@ -1588,7 +1555,7 @@ async def play(ctx, *, url):
         results = await music_bot.search_youtube(url, max_results=1)
         
         if not results:
-            await ctx.send(f"❌ No results found for: **{url}**")
+            await ctx.send(f"âŒ No results found for: **{url}**")
             return
         
         # Use the first result
@@ -1597,7 +1564,7 @@ async def play(ctx, *, url):
     
     # Check for YouTube Music URLs and give friendly reminder
     if 'music.youtube.com' in url:
-        await ctx.send("💡 **Tip:** YouTube Music links don't work due to DRM. Please use regular YouTube links (youtube.com) instead! *(Specially you, Kat(twat))* 😊")
+        await ctx.send("ðŸ’¡ **Tip:** YouTube Music links don't work due to DRM. Please use regular YouTube links (youtube.com) instead! *(Specially you, Kat(twat))* ðŸ˜Š")
         return
     
     # Join if needed
@@ -1607,7 +1574,7 @@ async def play(ctx, *, url):
         voice_client = ctx.guild.voice_client
 
     if not voice_client:
-        await ctx.send("❌ Could not connect to your voice channel.")
+        await ctx.send("âŒ Could not connect to your voice channel.")
         return
 
     # Handle playlist URLs - extract specific video
@@ -1617,33 +1584,13 @@ async def play(ctx, *, url):
             url = f"https://www.youtube.com/watch?v={video_id}"
     
     # Ultra-fast extraction - get full info immediately and cache it
-    if ULTRA_FAST:
-        info = await music_bot.extract_info_fast(url)
-        if not info:
-            await ctx.send("❌ Could not extract information. The video may be a live stream, region-restricted, or unavailable.")
-            return
-        title = info.get('title', 'Unknown')
-        # Create entry with cached info for instant playback
-        entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id, info=info)
-    else:
-        # Fallback to old method
-        if FAST_MODE:
-            try:
-                loop = asyncio.get_running_loop()
-                info = await loop.run_in_executor(None, lambda: music_bot.ytdl.extract_info(url, download=False, process=False))
-                title = info.get('title', 'Unknown') if info else 'Unknown'
-                entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id)
-            except:
-                title = 'Unknown'
-                entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id)
-        else:
-            info = await music_bot.extract_info(url)
-            if not info:
-                await ctx.send("Could not extract information.")
-                return
-            title = info.get('title', 'Unknown')
-            entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id, info=info)
-    
+    info = await music_bot.extract_info_fast(url)
+    if not info:
+        await ctx.send("âŒ Could not extract information. The video may be a live stream, region-restricted, or unavailable.")
+        return
+    title = info.get('title', 'Unknown')
+    # Create entry with cached info for instant playback
+    entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id, info=info)
     music_bot.queue.append(entry)
     
     if DEBUG:
@@ -1653,7 +1600,7 @@ async def play(ctx, *, url):
     if not voice_client.is_playing() and not voice_client.is_paused():
         await play_next(ctx)
     else:
-        await ctx.send(f"✅ Added **{title}** to queue.")
+        await ctx.send(f"âœ… Added **{title}** to queue.")
 
 
 @bot.command(name='playnext', aliases=['pn'])
@@ -1677,11 +1624,11 @@ async def playnext(ctx, *, url):
         position = int(url.strip())
         
         if not music_bot.queue:
-            await ctx.send("❌ The queue is empty.")
+            await ctx.send("âŒ The queue is empty.")
             return
         
         if position < 1 or position > len(music_bot.queue):
-            await ctx.send(f"❌ Invalid position. Queue has {len(music_bot.queue)} songs.")
+            await ctx.send(f"âŒ Invalid position. Queue has {len(music_bot.queue)} songs.")
             return
         
         # Get the song at that position
@@ -1697,7 +1644,7 @@ async def playnext(ctx, *, url):
         if voice_client.is_playing() or voice_client.is_paused():
             voice_client.stop()
         
-        await ctx.send(f"⏭️ Skipping to: **{target_song.title}**")
+        await ctx.send(f"â­ï¸ Skipping to: **{target_song.title}**")
         return
     
     # Check if it's a search query (not a URL)
@@ -1705,7 +1652,7 @@ async def playnext(ctx, *, url):
         results = await music_bot.search_youtube(url, max_results=1)
         
         if not results:
-            await ctx.send(f"❌ No results found for: **{url}**")
+            await ctx.send(f"âŒ No results found for: **{url}**")
             return
         
         # Use the first result
@@ -1720,31 +1667,12 @@ async def playnext(ctx, *, url):
             url = f"https://www.youtube.com/watch?v={video_id}"
 
     # Ultra-fast extraction with caching
-    if ULTRA_FAST:
-        info = await music_bot.extract_info_fast(url)
-        if not info:
-            await ctx.send("❌ Could not extract information.")
-            return
-        title = info.get('title', 'Unknown')
-        entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id, info=info)
-    else:
-        # Fallback
-        if FAST_MODE:
-            try:
-                loop = asyncio.get_running_loop()
-                info = await loop.run_in_executor(None, lambda: music_bot.ytdl.extract_info(url, download=False, process=False))
-                title = info.get('title', 'Unknown') if info else 'Unknown'
-                entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id)
-            except:
-                title = 'Unknown'
-                entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id)
-        else:
-            info = await music_bot.extract_info(url)
-            if not info:
-                await ctx.send("Could not extract information.")
-                return
-            title = info.get('title', 'Unknown')
-            entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id, info=info)
+    info = await music_bot.extract_info_fast(url)
+    if not info:
+        await ctx.send("âŒ Could not extract information.")
+        return
+    title = info.get('title', 'Unknown')
+    entry = QueueEntry(url=url, title=title, requester_id=ctx.author.id, info=info)
 
     # Insert next (front of queue)
     music_bot.queue.insert(0, entry)
@@ -1756,7 +1684,7 @@ async def playnext(ctx, *, url):
     if not voice_client.is_playing() and not voice_client.is_paused():
         await play_next(ctx)
     else:
-        await ctx.send(f"⏭️ Will play next: **{title}**")
+        await ctx.send(f"â­ï¸ Will play next: **{title}**")
 
 @bot.command(name='playlist', aliases=['pl'])
 async def playlist(ctx, *, query: str):
@@ -1799,7 +1727,7 @@ async def playlist(ctx, *, query: str):
         max_songs = 1
     elif max_songs > 100:
         max_songs = 100
-        await ctx.send(f"⚠️ Maximum 100 songs allowed, limiting to 100.")
+        await ctx.send(f"âš ï¸ Maximum 100 songs allowed, limiting to 100.")
     
     # Check if it's a search query (not a URL) - search for multiple songs
     if not is_url:
@@ -1815,16 +1743,16 @@ async def playlist(ctx, *, query: str):
         if current_queue_size + target_songs > 100:
             target_songs = 100 - current_queue_size
             if target_songs <= 0:
-                await ctx.send(f"❌ Queue is full! Maximum 100 songs allowed. Current queue has {current_queue_size} songs.")
+                await ctx.send(f"âŒ Queue is full! Maximum 100 songs allowed. Current queue has {current_queue_size} songs.")
                 return
-            await ctx.send(f"⚠️ Queue limit reached. Adding only {target_songs} songs to reach the 100 song maximum.")
+            await ctx.send(f"âš ï¸ Queue limit reached. Adding only {target_songs} songs to reach the 100 song maximum.")
         
         # Search with extra results to account for duplicates (fetch 4x what we need)
         # Higher multiplier helps ensure we get enough good results after filtering
         results = await music_bot.search_youtube(url, max_results=target_songs * 4)
         
         if not results:
-            await ctx.send(f"❌ No results found for: **{url}**")
+            await ctx.send(f"âŒ No results found for: **{url}**")
             return
         
         # Add search results to queue, skipping duplicates until we reach target
@@ -1855,13 +1783,13 @@ async def playlist(ctx, *, query: str):
         
         if added_count == 0:
             if skipped_duplicates > 0:
-                await ctx.send(f"❌ All {skipped_duplicates} songs were already in the queue.")
+                await ctx.send(f"âŒ All {skipped_duplicates} songs were already in the queue.")
             else:
-                await ctx.send("❌ Could not add any songs to the queue.")
+                await ctx.send("âŒ Could not add any songs to the queue.")
             return
         
         # Show summary message
-        message = f"✅ Added **{added_count}** song(s)"
+        message = f"âœ… Added **{added_count}** song(s)"
         if skipped_duplicates > 0:
             message += f" ({skipped_duplicates} duplicate(s) skipped)"
         await ctx.send(message)
@@ -1874,7 +1802,7 @@ async def playlist(ctx, *, query: str):
     
     # Check for YouTube Music URLs and give friendly reminder
     if 'music.youtube.com' in url:
-        await ctx.send("💡 **Tip:** YouTube Music playlists don't work due to DRM. Please use regular YouTube playlists (youtube.com) instead! *(Especially you, Kat)* 😊")
+        await ctx.send("ðŸ’¡ **Tip:** YouTube Music playlists don't work due to DRM. Please use regular YouTube playlists (youtube.com) instead! *(Especially you, Kat)* ðŸ˜Š")
         return
 
     # Join voice if needed
@@ -1891,7 +1819,7 @@ async def playlist(ctx, *, query: str):
     all_entries = await music_bot.extract_playlist(url, max_songs)
     
     if not all_entries or len(all_entries) == 0:
-        await ctx.send("❌ Could not extract songs from playlist")
+        await ctx.send("âŒ Could not extract songs from playlist")
         return
     
     # Check if adding would exceed 100 song queue limit
@@ -1899,10 +1827,10 @@ async def playlist(ctx, *, query: str):
     if current_queue_size + len(all_entries) > 100:
         allowed = 100 - current_queue_size
         if allowed <= 0:
-            await ctx.send(f"❌ Queue is full! Maximum 100 songs allowed. Current queue has {current_queue_size} songs.")
+            await ctx.send(f"âŒ Queue is full! Maximum 100 songs allowed. Current queue has {current_queue_size} songs.")
             return
         all_entries = all_entries[:allowed]
-        await ctx.send(f"⚠️ Queue limit reached. Adding only {allowed} songs to reach the 100 song maximum.")
+        await ctx.send(f"âš ï¸ Queue limit reached. Adding only {allowed} songs to reach the 100 song maximum.")
     
     # Track if we should start playback immediately
     should_start_playback = not voice_client.is_playing() and not voice_client.is_paused()
@@ -1932,7 +1860,7 @@ async def playlist(ctx, *, query: str):
                 first_song_added = True
                 await play_next(ctx)
                 # Show immediate feedback
-                await ctx.send(f"🎵 Playing first song, loading {len(all_entries) - 1} more...")
+                await ctx.send(f"ðŸŽµ Playing first song, loading {len(all_entries) - 1} more...")
                 
         except Exception as e:
             logger.error(f"Failed to queue entry: {e}")
@@ -1940,9 +1868,9 @@ async def playlist(ctx, *, query: str):
     
     if added_count == 0:
         if skipped_duplicates > 0:
-            await ctx.send(f"❌ All {skipped_duplicates} songs were already in the queue.")
+            await ctx.send(f"âŒ All {skipped_duplicates} songs were already in the queue.")
         else:
-            await ctx.send("❌ Could not add songs")
+            await ctx.send("âŒ Could not add songs")
         return
 
     # Advance the offset so !more knows where to continue
@@ -1950,17 +1878,17 @@ async def playlist(ctx, *, query: str):
 
     # Show final summary message (only if we didn't already show the "Playing first song" message)
     if not first_song_added:
-        message = f"✅ Added **{added_count}** song(s)"
+        message = f"âœ… Added **{added_count}** song(s)"
         if skipped_duplicates > 0:
             message += f" ({skipped_duplicates} duplicate(s) skipped)"
-        message += f" — use `!more` to load the next batch"
+        message += f" â€” use `!more` to load the next batch"
         await ctx.send(message)
     else:
         # Just show final count
-        message = f"✅ Total: {added_count} songs added"
+        message = f"âœ… Total: {added_count} songs added"
         if skipped_duplicates > 0:
             message += f" ({skipped_duplicates} duplicates skipped)"
-        message += f" — use `!more` to load the next batch"
+        message += f" â€” use `!more` to load the next batch"
         await ctx.send(message)
 
 
@@ -1976,7 +1904,7 @@ async def more(ctx, max_songs: int = 15):
         return
 
     if not music_bot.last_playlist_url:
-        await ctx.send("❌ No playlist loaded yet. Use `!playlist <url>` first.")
+        await ctx.send("âŒ No playlist loaded yet. Use `!playlist <url>` first.")
         return
 
     voice_client = ctx.guild.voice_client
@@ -1990,22 +1918,22 @@ async def more(ctx, max_songs: int = 15):
         max_songs = 100
 
     start = music_bot.last_playlist_offset + 1
-    await ctx.send(f"⏳ Loading songs {start}–{start + max_songs - 1} from the playlist...")
+    await ctx.send(f"â³ Loading songs {start}â€“{start + max_songs - 1} from the playlist...")
 
     all_entries = await music_bot.extract_playlist(music_bot.last_playlist_url, max_songs, start=start)
 
     if not all_entries:
-        await ctx.send("❌ No more songs found in the playlist.")
+        await ctx.send("âŒ No more songs found in the playlist.")
         return
 
     current_queue_size = len(music_bot.queue)
     if current_queue_size + len(all_entries) > 100:
         allowed = 100 - current_queue_size
         if allowed <= 0:
-            await ctx.send(f"❌ Queue is full! ({current_queue_size}/100 songs)")
+            await ctx.send(f"âŒ Queue is full! ({current_queue_size}/100 songs)")
             return
         all_entries = all_entries[:allowed]
-        await ctx.send(f"⚠️ Queue limit reached. Adding only {allowed} songs.")
+        await ctx.send(f"âš ï¸ Queue limit reached. Adding only {allowed} songs.")
 
     added_count = 0
     skipped_duplicates = 0
@@ -2021,15 +1949,15 @@ async def more(ctx, max_songs: int = 15):
         added_count += 1
 
     if added_count == 0:
-        await ctx.send(f"❌ All {skipped_duplicates} songs were already in the queue." if skipped_duplicates else "❌ Could not add any songs.")
+        await ctx.send(f"âŒ All {skipped_duplicates} songs were already in the queue." if skipped_duplicates else "âŒ Could not add any songs.")
         return
 
     music_bot.last_playlist_offset += len(all_entries)
 
-    message = f"✅ Added **{added_count}** more song(s)"
+    message = f"âœ… Added **{added_count}** more song(s)"
     if skipped_duplicates > 0:
         message += f" ({skipped_duplicates} duplicate(s) skipped)"
-    message += f" — use `!more` again for the next batch"
+    message += f" â€” use `!more` again for the next batch"
     await ctx.send(message)
 
     if not voice_client.is_playing() and not voice_client.is_paused():
@@ -2049,7 +1977,7 @@ async def show_queue(ctx, arg: str = None):
         lines = [f"**Current Queue ({len(music_bot.queue)} songs):**"]
         for i, entry in enumerate(music_bot.queue):
             lines.append(f"{i+1}. {entry.title}")
-        # Split into ≤2000-char chunks
+        # Split into â‰¤2000-char chunks
         chunk, chunks = "", []
         for line in lines:
             if len(chunk) + len(line) + 1 > 1900:
@@ -2072,50 +2000,50 @@ async def remove_from_queue(ctx, position: int):
     """
     try:
         if not music_bot.queue:
-            await ctx.send("❌ Queue is empty!")
+            await ctx.send("âŒ Queue is empty!")
             return
         
         # Convert to 0-based index
         index = position - 1
         
         if index < 0 or index >= len(music_bot.queue):
-            await ctx.send(f"❌ Invalid position! Queue has {len(music_bot.queue)} song(s). Use positions 1-{len(music_bot.queue)}")
+            await ctx.send(f"âŒ Invalid position! Queue has {len(music_bot.queue)} song(s). Use positions 1-{len(music_bot.queue)}")
             return
         
         # Remove the song
         removed_entry = music_bot.queue.pop(index)
         
-        await ctx.send(f"✅ Removed from queue (position {position}):\n**{removed_entry.title}**")
+        await ctx.send(f"âœ… Removed from queue (position {position}):\n**{removed_entry.title}**")
         logger.info(f"Removed from queue at position {position}: {removed_entry.title}")
         
     except ValueError:
-        await ctx.send("❌ Invalid position! Use a number like: `!remove 5`")
+        await ctx.send("âŒ Invalid position! Use a number like: `!remove 5`")
     except Exception as e:
         logger.error(f"Error in remove command: {e}", exc_info=True)
-        await ctx.send(f"❌ Error removing song: {str(e)}")
+        await ctx.send(f"âŒ Error removing song: {str(e)}")
 
 @bot.command(name='shuffle', aliases=['s'])
 async def shuffle_queue(ctx):
     """Shuffle the queue when it has more than 10 songs."""
     try:
         if not music_bot.queue:
-            await ctx.send("❌ Queue is empty!")
+            await ctx.send("âŒ Queue is empty!")
             return
         
         queue_length = len(music_bot.queue)
         
         if queue_length < 10:
-            await ctx.send(f"❌ Queue only has {queue_length} song(s). Need at least 10 songs to shuffle.")
+            await ctx.send(f"âŒ Queue only has {queue_length} song(s). Need at least 10 songs to shuffle.")
             return
         
         # Shuffle the queue
         random.shuffle(music_bot.queue)
         
-        await ctx.send(f"🔀 **Shuffled {queue_length} songs in the queue!**")
+        await ctx.send(f"ðŸ”€ **Shuffled {queue_length} songs in the queue!**")
         logger.info(f"Shuffled queue ({queue_length} songs)")
     except Exception as e:
         logger.error(f"Error in shuffle command: {e}", exc_info=True)
-        await ctx.send(f"❌ Error shuffling queue: {str(e)}")
+        await ctx.send(f"âŒ Error shuffling queue: {str(e)}")
 
 # ============================================================================
 # BOT COMMANDS - Playback Control
@@ -2160,26 +2088,14 @@ async def resume(ctx):
 @bot.command(name='stop')
 async def stop(ctx):
     """Stop playback, clear queue, and leave voice channel."""
-    voice_client = ctx.guild.voice_client
-    if not voice_client:
+    if not ctx.guild.voice_client:
         await ctx.send("Not connected to a voice channel.")
         return
-    
-    # Clear the queue and current track so on_voice_state_update
-    # doesn't treat the disconnect as unexpected and schedule a reconnect
-    queue_count = len(music_bot.queue)
-    music_bot.queue.clear()
-    music_bot.current_track = None
 
-    # Stop playback
-    if voice_client.is_playing() or voice_client.is_paused():
-        voice_client.stop()
-    
-    # Leave voice channel
-    await voice_client.disconnect()
-    
-    if queue_count > 0:
-        await ctx.send(f"⏹️ Stopped playback, cleared {queue_count} song(s), and left voice channel.")
+    count = await leave_voice(ctx)
+
+    if count and count > 0:
+        await ctx.send(f"⏹️ Stopped playback, cleared {count} song(s), and left voice channel.")
     else:
         await ctx.send("⏹️ Stopped playback and left voice channel.")
 
@@ -2202,9 +2118,9 @@ async def volume(ctx, value: int):
             logger.warning(f"Could not apply volume to current source: {e}")
 
     if applied:
-        await ctx.send(f"🔊 Volume set to **{value}%** (applied to current song).")
+        await ctx.send(f"ðŸ”Š Volume set to **{value}%** (applied to current song).")
     else:
-        await ctx.send(f"🔊 Volume set to **{value}%** (will apply from next song).")
+        await ctx.send(f"ðŸ”Š Volume set to **{value}%** (will apply from next song).")
 
 # ============================================================================
 # BOT COMMANDS - File Management
@@ -2217,7 +2133,7 @@ async def list_files(ctx):
         download_dir = DOWNLOAD_FOLDER
         
         # Show the exact path being checked
-        await ctx.send(f"📂 **Checking downloads folder:**\n`{download_dir}`\n")
+        await ctx.send(f"ðŸ“‚ **Checking downloads folder:**\n`{download_dir}`\n")
         
         if os.path.exists(download_dir) and os.path.isdir(download_dir):
             files = [f for f in os.listdir(download_dir) if os.path.isfile(os.path.join(download_dir, f))]
@@ -2236,18 +2152,18 @@ async def list_files(ctx):
                     file_date = datetime.fromtimestamp(file_time).strftime("%m/%d %H:%M")
                     file_size = os.path.getsize(filepath)
                     size_mb = round(file_size / (1024 * 1024), 1)
-                    file_info.append(f"🎵 {filename[:50]}{'...' if len(filename) > 50 else ''}\n   📅 {file_date} • 💾 {size_mb}MB")
+                    file_info.append(f"ðŸŽµ {filename[:50]}{'...' if len(filename) > 50 else ''}\n   ðŸ“… {file_date} â€¢ ðŸ’¾ {size_mb}MB")
                 except:
-                    file_info.append(f"🎵 {filename[:50]}{'...' if len(filename) > 50 else ''}")
+                    file_info.append(f"ðŸŽµ {filename[:50]}{'...' if len(filename) > 50 else ''}")
             
             msg = f"**Audio files ({len(audio_files)} total):**\n\n" + "\n\n".join(file_info)
             if len(audio_files) > 10:
                 msg += f"\n\n... and {len(audio_files) - 10} more files"
             await ctx.send(msg)
         else:
-            await ctx.send(f"❌ Downloads folder not found at: `{download_dir}`")
+            await ctx.send(f"âŒ Downloads folder not found at: `{download_dir}`")
     except Exception as e:
-        await ctx.send(f"❌ Error listing files: {e}")
+        await ctx.send(f"âŒ Error listing files: {e}")
         logger.error(f"Files listing error: {e}")
 
 @bot.command(name='cleanup')
@@ -2267,15 +2183,15 @@ async def manual_cleanup(ctx, hours: int = 24):
         
         # Safety verification
         if not (os.path.exists(download_dir) and os.path.isdir(download_dir)):
-            await ctx.send(f"❌ Downloads folder not found at: `{download_dir}`")
+            await ctx.send(f"âŒ Downloads folder not found at: `{download_dir}`")
             return
         
         if not ("HootBot" in download_dir and "downloads" in download_dir):
-            await ctx.send(f"❌ Safety check failed: refusing to clean non-HootBot directory")
+            await ctx.send(f"âŒ Safety check failed: refusing to clean non-HootBot directory")
             return
         
         # Show which directory we're cleaning
-        await ctx.send(f"🧹 Cleaning files older than {hours} hours from:\n`{download_dir}`")
+        await ctx.send(f"ðŸ§¹ Cleaning files older than {hours} hours from:\n`{download_dir}`")
         
         for filename in os.listdir(download_dir):
             filepath = os.path.join(download_dir, filename)
@@ -2291,51 +2207,17 @@ async def manual_cleanup(ctx, hours: int = 24):
                 logger.error(f"Error cleaning up {filename}: {e}")
         
         if cleaned_count > 0:
-            await ctx.send(f"✅ Successfully cleaned up {cleaned_count} audio files older than {hours} hours.")
+            await ctx.send(f"âœ… Successfully cleaned up {cleaned_count} audio files older than {hours} hours.")
         else:
-            await ctx.send(f"ℹ️ No audio files found older than {hours} hours in downloads folder.")
+            await ctx.send(f"â„¹ï¸ No audio files found older than {hours} hours in downloads folder.")
             
     except Exception as e:
-        await ctx.send(f"❌ Error during cleanup: {e}")
+        await ctx.send(f"âŒ Error during cleanup: {e}")
         logger.error(f"Manual cleanup error: {e}")
 
 # ============================================================================
 # BOT COMMANDS - Settings & Configuration
 # ============================================================================
-
-# @bot.command(name='fastmode')
-# async def toggle_fast_mode(ctx, mode: str = None):
-#     """Toggle fast mode for quicker streaming."""
-#     global FAST_MODE
-#     if mode is None:
-#         await ctx.send(f"Fast mode is {'ON' if FAST_MODE else 'OFF'}.")
-#         return
-#     
-#     if mode.lower() in ('on', '1', 'true'):
-#         FAST_MODE = True
-#         await ctx.send("Fast mode enabled. Prioritizing speed over extraction quality.")
-#     elif mode.lower() in ('off', '0', 'false'):
-#         FAST_MODE = False
-#         await ctx.send("Fast mode disabled. Full extraction enabled.")
-#     else:
-#         await ctx.send("Use 'on' or 'off'.")
-
-# @bot.command(name='forcedownload')
-# async def toggle_force_download(ctx, mode: str = None):
-#     """Toggle force download mode to fix timing issues."""
-#     global FORCE_DOWNLOAD
-#     if mode is None:
-#         await ctx.send(f"Force download is {'ON' if FORCE_DOWNLOAD else 'OFF'}.")
-#         return
-#     
-#     if mode.lower() in ('on', '1', 'true'):
-#         FORCE_DOWNLOAD = True
-#         await ctx.send("Force download enabled. All tracks will be downloaded for proper timing.")
-#     elif mode.lower() in ('off', '0', 'false'):
-#         FORCE_DOWNLOAD = False
-#         await ctx.send("Force download disabled. Will try streaming when possible.")
-#     else:
-#         await ctx.send("Use 'on' or 'off'.")
 
 @bot.command(name='debug')
 async def toggle_debug(ctx, mode: str = None):
@@ -2385,45 +2267,6 @@ async def restart_current(ctx):
     await asyncio.sleep(0.5)
     await play_next(ctx)
 
-# @bot.command(name='finduser')
-# async def find_user(ctx, *, search_term: str = "skeet"):
-#     """Debug command to find users by partial name match."""
-#     if not DEBUG:
-#         await ctx.send("Enable debug mode first with `!debug on`")
-#         return
-#     
-#     matches = []
-#     search_lower = search_term.lower()
-#     
-#     for member in ctx.guild.members:
-#         if (search_lower in member.name.lower() or 
-#             search_lower in member.display_name.lower()):
-#             matches.append(f"**{member.name}** (display: {member.display_name}, id: {member.id})")
-#     
-#     if matches:
-#         await ctx.send(f"Found {len(matches)} matches for '{search_term}':\n" + "\n".join(matches[:10]))
-#     else:
-#         await ctx.send(f"No matches found for '{search_term}'")
-
-# @bot.command(name='testping')
-# async def test_ping(ctx, user_id: int = None):
-#     """Test ping by user ID (for debugging)."""
-#     if not DEBUG:
-#         await ctx.send("Enable debug mode first with `!debug on`")
-#         return
-#     
-#     if user_id:
-#         try:
-#             user = bot.get_user(user_id) or ctx.guild.get_member(user_id)
-#             if user:
-#                 await ctx.send(f"Test ping: {user.mention}")
-#             else:
-#                 await ctx.send(f"User with ID {user_id} not found")
-#         except:
-#             await ctx.send(f"Invalid user ID: {user_id}")
-#     else:
-#         await ctx.send("Usage: `!testping <user_id>` - Use `!finduser` to get user IDs")
-
 # ============================================================================
 # BOT COMMANDS - Information & Help
 # ============================================================================
@@ -2433,13 +2276,13 @@ async def status(ctx):
     """Show detailed bot status for debugging."""
     voice_client = ctx.guild.voice_client
     if not voice_client:
-        await ctx.send("❌ Not connected to voice channel")
+        await ctx.send("âŒ Not connected to voice channel")
         return
     
-    status_msg = "🎵 **Bot Status:**\n"
-    status_msg += f"Connected: ✅ {voice_client.channel.name}\n"
-    status_msg += f"Playing: {'✅' if voice_client.is_playing() else '❌'}\n"
-    status_msg += f"Paused: {'✅' if voice_client.is_paused() else '❌'}\n"
+    status_msg = "ðŸŽµ **Bot Status:**\n"
+    status_msg += f"Connected: âœ… {voice_client.channel.name}\n"
+    status_msg += f"Playing: {'âœ…' if voice_client.is_playing() else 'âŒ'}\n"
+    status_msg += f"Paused: {'âœ…' if voice_client.is_paused() else 'âŒ'}\n"
     status_msg += f"Queue length: {len(music_bot.queue)}\n"
     
     if music_bot.current_track:
@@ -2454,7 +2297,7 @@ async def status(ctx):
 async def quick_commands(ctx):
     """Quick command reference."""
     embed = discord.Embed(
-        title="🎵 Quick Commands",
+        title="ðŸŽµ Quick Commands",
         description="Essential bot commands at a glance",
         color=0x00ffff
     )
@@ -2488,13 +2331,13 @@ async def help_command(ctx, category: str = None):
     if category is None:
         # Main help with categories
         embed = discord.Embed(
-            title="🎵 HootBot Commands",
+            title="ðŸŽµ HootBot Commands",
             description="Your Discord music bot with advanced features!",
             color=0x00ff00
         )
         
         embed.add_field(
-            name="🎶 **Music Commands**",
+            name="ðŸŽ¶ **Music Commands**",
             value="`!play` / `!p <url or search>` - Play a song or search YouTube\n"
                   "`!playlist` / `!pl <url or artist>` - Add playlist or search for artist songs\n"
                   "`!playnext` / `!pn <url/search/number>` - Play next or jump to queue position\n"
@@ -2508,7 +2351,7 @@ async def help_command(ctx, category: str = None):
         )
         
         embed.add_field(
-            name="🎛️ **Queue & Control**",
+            name="ðŸŽ›ï¸ **Queue & Control**",
             value="`!queue` / `!q` - Show current queue\n"
                   "`!shuffle` / `!s` - Shuffle queue (requires 10+ songs)\n"
                   "`!remove <number>` - Remove song from queue\n"
@@ -2520,89 +2363,89 @@ async def help_command(ctx, category: str = None):
         )
         
         embed.add_field(
-            name="⚙️ **Settings**",
+            name="âš™ï¸ **Settings**",
             value="`!debug on/off` - Toggle debug logging",
             inline=False
         )
         
         embed.add_field(
-            name="🔧 **Utils**",
+            name="ðŸ”§ **Utils**",
             value="`!cleanup <hours>` - Manual cleanup of old downloads\n"
                   "`!checkupdates` - Check if dependencies are up to date\n"
-                  "`!skeet` - Friend reference command 😄",
+                  "`!skeet` - Friend reference command ðŸ˜„",
             inline=False
         )
         
         embed.add_field(
-            name="📖 **Get Detailed Help**",
+            name="ðŸ“– **Get Detailed Help**",
             value="`!help music` - Music command details\n"
                   "`!help settings` - Settings explanations\n"
                   "`!help tips` - Usage tips & tricks",
             inline=False
         )
         
-        embed.set_footer(text="HootBot • Optimized for speed and reliability")
+        embed.set_footer(text="HootBot â€¢ Optimized for speed and reliability")
         await ctx.send(embed=embed)
         
     elif category.lower() == "music":
         embed = discord.Embed(
-            title="🎶 Music Commands - Detailed",
+            title="ðŸŽ¶ Music Commands - Detailed",
             color=0x0099ff
         )
         
         embed.add_field(
             name="`!play` / `!p <url or search>`",
             value="**Play a song from URL or search YouTube**\n"
-                  "• Supports YouTube URLs or text search\n"
-                  "• Smart filtering: prioritizes official music videos\n"
-                  "• Filters out AMVs, fan videos, and non-music content\n"
-                  "• Queues if something is already playing",
+                  "â€¢ Supports YouTube URLs or text search\n"
+                  "â€¢ Smart filtering: prioritizes official music videos\n"
+                  "â€¢ Filters out AMVs, fan videos, and non-music content\n"
+                  "â€¢ Queues if something is already playing",
             inline=False
         )
         
         embed.add_field(
             name="`!playlist` / `!pl <url or artist>`",
             value="**Add multiple songs from playlist or artist search**\n"
-                  "• Default: 10 songs (specify number: `!pl artist 20`)\n"
-                  "• YouTube playlists, mixes, radio, & YouTube Music albums ✅\n"
-                  "• Artist search: finds multiple songs by that artist\n"
-                  "• Auto-skips duplicates already in queue",
+                  "â€¢ Default: 10 songs (specify number: `!pl artist 20`)\n"
+                  "â€¢ YouTube playlists, mixes, radio, & YouTube Music albums âœ…\n"
+                  "â€¢ Artist search: finds multiple songs by that artist\n"
+                  "â€¢ Auto-skips duplicates already in queue",
             inline=False
         )
         
         embed.add_field(
             name="`!playnext` / `!pn <url/search/number>`",
             value="**Insert song next OR jump to queue position**\n"
-                  "• With URL/search: adds song to play next\n"
-                  "• With number: jumps to that queue position (e.g., `!pn 5`)\n"
-                  "• Useful for priority requests or quick navigation",
+                  "â€¢ With URL/search: adds song to play next\n"
+                  "â€¢ With number: jumps to that queue position (e.g., `!pn 5`)\n"
+                  "â€¢ Useful for priority requests or quick navigation",
             inline=False
         )
         
         embed.add_field(
             name="`!skip` / `!next`",
             value="**Skip to next song in queue**\n"
-                  "• Stops current playback immediately\n"
-                  "• Automatically plays next queued song\n"
-                  "• No effect if queue is empty",
+                  "â€¢ Stops current playback immediately\n"
+                  "â€¢ Automatically plays next queued song\n"
+                  "â€¢ No effect if queue is empty",
             inline=False
         )
         
         embed.add_field(
             name="`!restart`",
             value="**Restart current song from beginning**\n"
-                  "• Useful if song started mid-way\n"
-                  "• Re-extracts fresh stream data\n"
-                  "• Guaranteed to start at 0:00",
+                  "â€¢ Useful if song started mid-way\n"
+                  "â€¢ Re-extracts fresh stream data\n"
+                  "â€¢ Guaranteed to start at 0:00",
             inline=False
         )
         
         embed.add_field(
             name="`!nowplaying` / `!np`",
             value="**Show current track info**\n"
-                  "• Displays song title\n"
-                  "• Shows who requested it\n"
-                  "• Updates in real-time",
+                  "â€¢ Displays song title\n"
+                  "â€¢ Shows who requested it\n"
+                  "â€¢ Updates in real-time",
             inline=False
         )
         
@@ -2610,26 +2453,26 @@ async def help_command(ctx, category: str = None):
         
     elif category.lower() == "settings":
         embed = discord.Embed(
-            title="⚙️ Settings - Detailed",
+            title="âš™ï¸ Settings - Detailed",
             color=0xff9900
         )
         
         embed.add_field(
             name="`!debug on/off`",
             value="**Diagnostic Information**\n"
-                  "• **ON**: Detailed logs and error info\n"
-                  "• **OFF**: Clean, minimal output\n"
-                  "• Useful for troubleshooting issues",
+                  "â€¢ **ON**: Detailed logs and error info\n"
+                  "â€¢ **OFF**: Clean, minimal output\n"
+                  "â€¢ Useful for troubleshooting issues",
             inline=False
         )
         
         embed.add_field(
             name="**Bot Configuration**",
             value="Bot is optimized for speed and reliability with:\n"
-                  "• Smart YouTube search with music-only filtering\n"
-                  "• Background preloading for instant transitions\n"
-                  "• Automatic duplicate detection in playlists\n"
-                  "• Cached extraction for faster performance",
+                  "â€¢ Smart YouTube search with music-only filtering\n"
+                  "â€¢ Background preloading for instant transitions\n"
+                  "â€¢ Automatic duplicate detection in playlists\n"
+                  "â€¢ Cached extraction for faster performance",
             inline=False
         )
         
@@ -2637,44 +2480,44 @@ async def help_command(ctx, category: str = None):
         
     elif category.lower() == "tips":
         embed = discord.Embed(
-            title="💡 Tips & Tricks",
+            title="ðŸ’¡ Tips & Tricks",
             color=0x9900ff
         )
         
         embed.add_field(
-            name="🎵 **Getting Best Performance**",
-            value="• Bot is automatically optimized for speed\n"
-                  "• Background preloading makes transitions instant\n"
-                  "• Smart caching reduces repeated extractions\n"
-                  "• Join voice channel before using `!play`",
+            name="ðŸŽµ **Getting Best Performance**",
+            value="â€¢ Bot is automatically optimized for speed\n"
+                  "â€¢ Background preloading makes transitions instant\n"
+                  "â€¢ Smart caching reduces repeated extractions\n"
+                  "â€¢ Join voice channel before using `!play`",
             inline=False
         )
         
         embed.add_field(
-            name="🔧 **Troubleshooting**",
-            value="• If song starts mid-way: use `!restart`\n"
-                  "• If no audio: check `!status` and enable `!debug on`\n"
-                  "• Use `!remove <number>` to remove problematic songs\n"
-                  "• Use `!pn <number>` to jump to a specific queue position\n"
-                  "• Use `!skip` if a song is stuck or not playing",
+            name="ðŸ”§ **Troubleshooting**",
+            value="â€¢ If song starts mid-way: use `!restart`\n"
+                  "â€¢ If no audio: check `!status` and enable `!debug on`\n"
+                  "â€¢ Use `!remove <number>` to remove problematic songs\n"
+                  "â€¢ Use `!pn <number>` to jump to a specific queue position\n"
+                  "â€¢ Use `!skip` if a song is stuck or not playing",
             inline=False
         )
         
         embed.add_field(
-            name="🎶 **URL Support**",
-            value="• YouTube videos & playlists ✅\n"
-                  "• YouTube Music (songs, albums, playlists) ✅\n"
-                  "• Shortened youtu.be links ✅\n"
-                  "• Auto-detects playlist vs single video",
+            name="ðŸŽ¶ **URL Support**",
+            value="â€¢ YouTube videos & playlists âœ…\n"
+                  "â€¢ YouTube Music (songs, albums, playlists) âœ…\n"
+                  "â€¢ Shortened youtu.be links âœ…\n"
+                  "â€¢ Auto-detects playlist vs single video",
             inline=False
         )
         
         embed.add_field(
-            name="⚡ **Pro Tips**",
-            value="• Queue multiple songs for continuous playback\n"
-                  "• Use `!volume` to adjust without re-extraction\n"
-                  "• Bot auto-leaves after 30 seconds of inactivity\n"
-                  "• `!leave` stops everything and clears queue",
+            name="âš¡ **Pro Tips**",
+            value="â€¢ Queue multiple songs for continuous playback\n"
+                  "â€¢ Use `!volume` to adjust without re-extraction\n"
+                  "â€¢ Bot auto-leaves after 30 seconds of inactivity\n"
+                  "â€¢ `!leave` stops everything and clears queue",
             inline=False
         )
         
@@ -2697,7 +2540,7 @@ async def check_updates(ctx):
     import re
     
     embed = discord.Embed(
-        title="📦 Checking for Updates",
+        title="ðŸ“¦ Checking for Updates",
         description="Scanning installed packages and FFmpeg...",
         color=discord.Color.blue()
     )
@@ -2726,9 +2569,9 @@ async def check_updates(ctx):
                     ffmpeg_version = "Installed (version unknown)"
                     ffmpeg_installed = True
         except FileNotFoundError:
-            ffmpeg_version = "❌ Not found in PATH"
+            ffmpeg_version = "âŒ Not found in PATH"
         except Exception as e:
-            ffmpeg_version = f"❌ Error: {str(e)[:50]}"
+            ffmpeg_version = f"âŒ Error: {str(e)[:50]}"
         
         # Get list of outdated packages
         result = subprocess.run(
@@ -2744,15 +2587,15 @@ async def check_updates(ctx):
             
             if not outdated:
                 embed = discord.Embed(
-                    title="✅ All Packages Up to Date",
+                    title="âœ… All Packages Up to Date",
                     description="All installed packages are current!",
                     color=discord.Color.green()
                 )
                 
                 # Show FFmpeg status
                 embed.add_field(
-                    name="🎬 FFmpeg",
-                    value=f"`{ffmpeg_version}`" + ("\n⚠️ Install from: https://ffmpeg.org" if not ffmpeg_installed else ""),
+                    name="ðŸŽ¬ FFmpeg",
+                    value=f"`{ffmpeg_version}`" + ("\nâš ï¸ Install from: https://ffmpeg.org" if not ffmpeg_installed else ""),
                     inline=False
                 )
                 
@@ -2783,15 +2626,15 @@ async def check_updates(ctx):
             
             # Updates available - show what will be updated
             embed = discord.Embed(
-                title="⚙️ Installing Updates",
+                title="âš™ï¸ Installing Updates",
                 description=f"Found {len(outdated)} package(s) to update...",
                 color=discord.Color.orange()
             )
             
             # Show FFmpeg status
             embed.add_field(
-                name="🎬 FFmpeg",
-                value=f"`{ffmpeg_version}`" + ("\n⚠️ Manual install required from: https://ffmpeg.org" if not ffmpeg_installed else ""),
+                name="ðŸŽ¬ FFmpeg",
+                value=f"`{ffmpeg_version}`" + ("\nâš ï¸ Manual install required from: https://ffmpeg.org" if not ffmpeg_installed else ""),
                 inline=False
             )
             
@@ -2803,7 +2646,7 @@ async def check_updates(ctx):
                 packages_to_update.append(name)
                 embed.add_field(
                     name=name,
-                    value=f"`{current}` → `{latest}`",
+                    value=f"`{current}` â†’ `{latest}`",
                     inline=True
                 )
             
@@ -2819,7 +2662,7 @@ async def check_updates(ctx):
             
             if update_result.returncode == 0:
                 embed = discord.Embed(
-                    title="✅ Updates Completed",
+                    title="âœ… Updates Completed",
                     description=f"Successfully updated {len(packages_to_update)} package(s)!",
                     color=discord.Color.green()
                 )
@@ -2830,7 +2673,7 @@ async def check_updates(ctx):
                 
                 if updated_critical:
                     embed.add_field(
-                        name="⚠️ Restart Required",
+                        name="âš ï¸ Restart Required",
                         value="Critical packages updated. Please restart the bot for changes to take effect.",
                         inline=False
                     )
@@ -2838,7 +2681,7 @@ async def check_updates(ctx):
                 embed.set_footer(text=f"Updated: {', '.join(packages_to_update)}")
             else:
                 embed = discord.Embed(
-                    title="❌ Update Failed",
+                    title="âŒ Update Failed",
                     description="Some packages failed to update.",
                     color=discord.Color.red()
                 )
@@ -2847,13 +2690,13 @@ async def check_updates(ctx):
             
             await status_msg.edit(embed=embed)
         else:
-            await status_msg.edit(content="❌ Error checking for updates. Make sure pip is working correctly.")
+            await status_msg.edit(content="âŒ Error checking for updates. Make sure pip is working correctly.")
             
     except subprocess.TimeoutExpired:
-        await status_msg.edit(content="❌ Update process timed out. Try again later.")
+        await status_msg.edit(content="âŒ Update process timed out. Try again later.")
     except Exception as e:
         logger.error(f"Error checking updates: {e}")
-        await ctx.send(f"❌ Error checking updates: {str(e)}")
+        await ctx.send(f"âŒ Error checking updates: {str(e)}")
 
 @bot.command(name='skeet')
 async def skeet(ctx):
@@ -2891,17 +2734,17 @@ async def skeet(ctx):
     insult = ""
     if random.randint(1, 4) == 1:  # 1 in 4 chance
         playful_insults = [
-            "You magnificent weirdo! 🙄",
-            "Hope you're not too busy being fabulous! 💅",
-            "Time to take a break from being a goofball! 🤪",
-            "Stop being so extra for 5 minutes! 😏",
-            "You absolute legend (and pain in my circuits)! 🤖"
+            "You magnificent weirdo! ðŸ™„",
+            "Hope you're not too busy being fabulous! ðŸ’…",
+            "Time to take a break from being a goofball! ðŸ¤ª",
+            "Stop being so extra for 5 minutes! ðŸ˜",
+            "You absolute legend (and pain in my circuits)! ðŸ¤–"
         ]
         insult = f" {random.choice(playful_insults)}"
     
     # Create embed with cat image
     embed = discord.Embed(
-        title="🐱 Cat Fact Time!",
+        title="ðŸ± Cat Fact Time!",
         description=cat_fact,
         color=0xFF69B4  # Hot pink color
     )
@@ -2909,7 +2752,7 @@ async def skeet(ctx):
     if cat_image_url:
         embed.set_image(url=cat_image_url)
     
-    embed.set_footer(text="Powered by adorable cats 🐾")
+    embed.set_footer(text="Powered by adorable cats ðŸ¾")
     
     # Send message WITHOUT pinging the user. Use display name or plain text instead.
     if target_user:
@@ -2998,7 +2841,7 @@ async def reconnect_and_resume(guild, channel):
             logger.info(f"Nothing to resume after reconnect in {guild.name}")
             return
 
-        logger.info(f"Attempting voice reconnect in {guild.name} → {channel.name}")
+        logger.info(f"Attempting voice reconnect in {guild.name} â†’ {channel.name}")
         await channel.connect()
         logger.info(f"Reconnected to {channel.name}")
 
@@ -3014,7 +2857,7 @@ async def reconnect_and_resume(guild, channel):
             music_bot.current_track = None
 
         if text_channel:
-            await text_channel.send("🔄 Reconnected to voice channel, resuming playback...")
+            await text_channel.send("ðŸ”„ Reconnected to voice channel, resuming playback...")
 
             class FakeCtx:
                 def __init__(self, guild, channel):
@@ -3025,7 +2868,7 @@ async def reconnect_and_resume(guild, channel):
 
             await play_next(FakeCtx(guild, text_channel))
         else:
-            logger.warning("No text channel stored for reconnect — playback not resumed")
+            logger.warning("No text channel stored for reconnect â€” playback not resumed")
 
     except asyncio.TimeoutError:
         logger.error(f"Voice reconnect timed out for {guild.name}")
@@ -3063,8 +2906,8 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         logger.warning(f"[cmd_error] CommandNotFound: '{ctx.message.content}' from {ctx.author}")
     elif isinstance(error, commands.MissingRequiredArgument):
-        logger.warning(f"[cmd_error] MissingArgument: '{ctx.message.content}' from {ctx.author} — {error}")
-        await ctx.send(f"❌ Missing argument: `{error.param.name}`")
+        logger.warning(f"[cmd_error] MissingArgument: '{ctx.message.content}' from {ctx.author} â€” {error}")
+        await ctx.send(f"âŒ Missing argument: `{error.param.name}`")
     else:
         logger.error(f"[cmd_error] {type(error).__name__} in '{ctx.message.content}' from {ctx.author}: {error}", exc_info=error)
 
@@ -3223,7 +3066,7 @@ async def welcome_on(ctx):
     """Enable welcome sounds for this server"""
     guild_id = ctx.guild.id
     music_bot.welcome_enabled[guild_id] = True
-    await ctx.send('✅ Welcome sounds are now **enabled**! 🎵')
+    await ctx.send('âœ… Welcome sounds are now **enabled**! ðŸŽµ')
     logger.info(f'Welcome sounds enabled for guild {guild_id}')
 
 @bot.command(name='welcomeoff', help='Disable welcome sounds when users join the voice channel')
@@ -3231,7 +3074,7 @@ async def welcome_off(ctx):
     """Disable welcome sounds for this server"""
     guild_id = ctx.guild.id
     music_bot.welcome_enabled[guild_id] = False
-    await ctx.send('🔇 Welcome sounds are now **disabled**.')
+    await ctx.send('ðŸ”‡ Welcome sounds are now **disabled**.')
     logger.info(f'Welcome sounds disabled for guild {guild_id}')
 
 @bot.command(name='welcomestatus', help='Check if welcome sounds are enabled or disabled')
@@ -3239,7 +3082,7 @@ async def welcome_status(ctx):
     """Check the current welcome sound status for this server"""
     guild_id = ctx.guild.id
     is_enabled = music_bot.welcome_enabled.get(guild_id, False)  # Default to disabled
-    status = "**enabled** ✅" if is_enabled else "**disabled** 🔇"
+    status = "**enabled** âœ…" if is_enabled else "**disabled** ðŸ”‡"
     await ctx.send(f'Welcome sounds are currently {status}')
 
 # ============================================================================
