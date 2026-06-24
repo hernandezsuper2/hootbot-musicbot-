@@ -21,6 +21,7 @@ from logging.handlers import RotatingFileHandler
 from urllib.parse import urlparse, parse_qs
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
+from pathlib import Path
 import aiohttp
 import random
 import time
@@ -33,10 +34,15 @@ try:
 except ImportError:
     pass
 
-# Ensure Node.js is on PATH so yt-dlp can solve YouTube's n-challenge
-_nodejs_path = r"C:\Program Files\nodejs"
-if _nodejs_path not in os.environ.get("PATH", ""):
-    os.environ["PATH"] = _nodejs_path + os.pathsep + os.environ.get("PATH", "")
+# Absolute path to the directory containing this file — used for all relative paths below.
+BASE_DIR = Path(__file__).resolve().parent
+
+# Ensure Node.js is on PATH so yt-dlp can solve YouTube's n-challenge (Windows only).
+# Override the default location via NODEJS_PATH env var if Node is installed elsewhere.
+if sys.platform == "win32":
+    _nodejs_path = os.environ.get("NODEJS_PATH", r"C:\Program Files\nodejs")
+    if _nodejs_path not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = _nodejs_path + os.pathsep + os.environ.get("PATH", "")
 
 # ============================================================================
 # CONFIGURATION
@@ -53,7 +59,7 @@ CACHE_DURATION = 300  # Cache stream URLs for 5 minutes (seconds)
 # Download Settings
 FORCE_DOWNLOAD = True  # Always download to ensure songs start at 0:00 (slower but reliable)
 FORCE_DOWNLOAD_FRAGMENTED = True  # Download fragmented formats to ensure proper start
-DOWNLOAD_FOLDER = r"C:\Users\herna\Desktop\Projectos\HootBot\downloads"
+DOWNLOAD_FOLDER = str(BASE_DIR / "downloads")
 
 # Audio Settings
 Current_volume = 0.1  # Default volume (10%)
@@ -63,7 +69,7 @@ TOKEN = os.environ.get('DISCORD_TOKEN', 'YOUR_TOKEN_HERE')
 
 # Welcome Sound Settings (for user 271755277663993856)
 WELCOME_CHANNEL_NAME = "Chillekevineese"  # Channel to monitor for joins
-WELCOME_SOUND_FILE = r"C:\Users\herna\Desktop\Projectos\HootBot\intros\Erika Intro.mp3"  # Local intro file for specific user
+WELCOME_SOUND_FILE = str(BASE_DIR / "intros" / "Erika Intro.mp3")
 
 # ============================================================================
 # LOGGING SETUP
@@ -87,7 +93,7 @@ logger = logging.getLogger('hootsbot')
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True  # Enable voice state tracking
-bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 
 # ============================================================================
 # DATA CLASSES
@@ -1029,7 +1035,7 @@ def has_multiple_commands(text):
     """Check for multiple commands in message."""
     if not text:
         return False
-    return len(re.findall(r'(?<!\S)![A-Za-z]+', text)) > 1
+    return len(re.findall(r'(?<!\S)\.[A-Za-z]+', text)) > 1
 
 async def reject_multiple_commands(ctx):
     """Reject messages with multiple commands."""
@@ -1443,7 +1449,7 @@ async def join(ctx):
 async def playfor(ctx, *, args: str):
     """Used by trusted bots: !playfor <channel-name> | <song>. Joins the named channel and plays."""
     if '|' not in args:
-        await ctx.send("❌ Usage: `!playfor <channel name> | <song>`")
+        await ctx.send("❌ Usage: `.playfor <channel name> | <song>`")
         return
     channel_name, query = [part.strip() for part in args.split('|', 1)]
     print(f"[playfor] Invoked by {ctx.author} (ID: {ctx.author.id}), channel='{channel_name}', query='{query}'", flush=True)
@@ -1876,14 +1882,14 @@ async def playlist(ctx, *, query: str):
         message = f"✅ Added **{added_count}** song(s)"
         if skipped_duplicates > 0:
             message += f" ({skipped_duplicates} duplicate(s) skipped)"
-        message += f" — use `!more` to load the next batch"
+        message += f" — use `.more` to load the next batch"
         await ctx.send(message)
     else:
         # Just show final count
         message = f"✅ Total: {added_count} songs added"
         if skipped_duplicates > 0:
             message += f" ({skipped_duplicates} duplicates skipped)"
-        message += f" — use `!more` to load the next batch"
+        message += f" — use `.more` to load the next batch"
         await ctx.send(message)
 
 
@@ -1899,7 +1905,7 @@ async def more(ctx, max_songs: int = 15):
         return
 
     if not music_bot.last_playlist_url:
-        await ctx.send("❌ No playlist loaded yet. Use `!playlist <url>` first.")
+        await ctx.send("❌ No playlist loaded yet. Use `.playlist <url>` first.")
         return
 
     voice_client = ctx.guild.voice_client
@@ -1952,7 +1958,7 @@ async def more(ctx, max_songs: int = 15):
     message = f"✅ Added **{added_count}** more song(s)"
     if skipped_duplicates > 0:
         message += f" ({skipped_duplicates} duplicate(s) skipped)"
-    message += f" — use `!more` again for the next batch"
+    message += f" — use `.more` again for the next batch"
     await ctx.send(message)
 
     if not voice_client.is_playing() and not voice_client.is_paused():
@@ -2012,7 +2018,7 @@ async def remove_from_queue(ctx, position: int):
         logger.info(f"Removed from queue at position {position}: {removed_entry.title}")
         
     except ValueError:
-        await ctx.send("❌ Invalid position! Use a number like: `!remove 5`")
+        await ctx.send("❌ Invalid position! Use a number like: `.remove 5`")
     except Exception as e:
         logger.error(f"Error in remove command: {e}", exc_info=True)
         await ctx.send(f"❌ Error removing song: {str(e)}")
@@ -2299,25 +2305,25 @@ async def quick_commands(ctx):
     
     embed.add_field(
         name="**Basic**",
-        value="`!play <url>` - Play song\n"
-              "`!playlist <url>` - Add playlist (10 songs)\n"
-              "`!skip` - Next song\n"
-              "`!pause` / `!resume`\n"
-              "`!queue` - Show queue\n"
-              "`!leave` - Stop & leave",
+        value="`.play <url>` - Play song\n"
+              "`.playlist <url>` - Add playlist (10 songs)\n"
+              "`.skip` - Next song\n"
+              "`.pause` / `.resume`\n"
+              "`.queue` - Show queue\n"
+              "`.leave` - Stop & leave",
         inline=True
     )
     
     embed.add_field(
         name="**Settings**",
-        value="`!volume <0-100>`\n"
-              "`!playnext <url>` - Force a song to play next\n"
-              "`!status` - Bot info\n"
-              "`!help` - Full help",
+        value="`.volume <0-100>`\n"
+              "`.playnext <url>` - Force a song to play next\n"
+              "`.status` - Bot info\n"
+              "`.help` - Full help",
         inline=True
     )
     
-    embed.set_footer(text="Use !help for detailed explanations")
+    embed.set_footer(text="Use .help for detailed explanations")
     await ctx.send(embed=embed)
 
 @bot.command(name='help')
@@ -2333,49 +2339,49 @@ async def help_command(ctx, category: str = None):
         
         embed.add_field(
             name="🎶 **Music Commands**",
-            value="`!play` / `!p <url or search>` - Play a song or search YouTube\n"
-                  "`!playlist` / `!pl <url or artist>` - Add playlist or search for artist songs\n"
-                  "`!playnext` / `!pn <url/search/number>` - Play next or jump to queue position\n"
-                  "`!skip` / `!next` - Skip current song\n"
-                  "`!pause` - Pause playback\n"
-                  "`!resume` - Resume playback\n"
-                  "`!stop` - Stop, clear queue, and leave\n"
-                  "`!restart` - Restart current song\n"
-                  "`!nowplaying` / `!np` - Show current song",
+            value="`.play` / `.p <url or search>` - Play a song or search YouTube\n"
+                  "`.playlist` / `.pl <url or artist>` - Add playlist or search for artist songs\n"
+                  "`.playnext` / `.pn <url/search/number>` - Play next or jump to queue position\n"
+                  "`.skip` / `.next` - Skip current song\n"
+                  "`.pause` - Pause playback\n"
+                  "`.resume` - Resume playback\n"
+                  "`.stop` - Stop, clear queue, and leave\n"
+                  "`.restart` - Restart current song\n"
+                  "`.nowplaying` / `.np` - Show current song",
             inline=False
         )
         
         embed.add_field(
             name="🎛️ **Queue & Control**",
-            value="`!queue` / `!q` - Show current queue\n"
-                  "`!shuffle` / `!s` - Shuffle queue (requires 10+ songs)\n"
-                  "`!remove <number>` - Remove song from queue\n"
-                  "`!join` - Join your voice channel\n"
-                  "`!leave` - Leave voice channel\n"
-                  "`!volume <0-100>` - Set volume\n"
-                  "`!status` - Show bot status",
+            value="`.queue` / `.q` - Show current queue\n"
+                  "`.shuffle` / `.s` - Shuffle queue (requires 10+ songs)\n"
+                  "`.remove <number>` - Remove song from queue\n"
+                  "`.join` - Join your voice channel\n"
+                  "`.leave` - Leave voice channel\n"
+                  "`.volume <0-100>` - Set volume\n"
+                  "`.status` - Show bot status",
             inline=False
         )
         
         embed.add_field(
             name="⚙️ **Settings**",
-            value="`!debug on/off` - Toggle debug logging",
+            value="`.debug on/off` - Toggle debug logging",
             inline=False
         )
         
         embed.add_field(
             name="🔧 **Utils**",
-            value="`!cleanup <hours>` - Manual cleanup of old downloads\n"
-                  "`!checkupdates` - Check if dependencies are up to date\n"
-                  "`!skeet` - Friend reference command 😄",
+            value="`.cleanup <hours>` - Manual cleanup of old downloads\n"
+                  "`.checkupdates` - Check if dependencies are up to date\n"
+                  "`.skeet` - Friend reference command 😄",
             inline=False
         )
         
         embed.add_field(
             name="📖 **Get Detailed Help**",
-            value="`!help music` - Music command details\n"
-                  "`!help settings` - Settings explanations\n"
-                  "`!help tips` - Usage tips & tricks",
+            value="`.help music` - Music command details\n"
+                  "`.help settings` - Settings explanations\n"
+                  "`.help tips` - Usage tips & tricks",
             inline=False
         )
         
@@ -2389,7 +2395,7 @@ async def help_command(ctx, category: str = None):
         )
         
         embed.add_field(
-            name="`!play` / `!p <url or search>`",
+            name="`.play` / `.p <url or search>`",
             value="**Play a song from URL or search YouTube**\n"
                   "• Supports YouTube URLs or text search\n"
                   "• Smart filtering: prioritizes official music videos\n"
@@ -2399,9 +2405,9 @@ async def help_command(ctx, category: str = None):
         )
         
         embed.add_field(
-            name="`!playlist` / `!pl <url or artist>`",
+            name="`.playlist` / `.pl <url or artist>`",
             value="**Add multiple songs from playlist or artist search**\n"
-                  "• Default: 10 songs (specify number: `!pl artist 20`)\n"
+                  "• Default: 10 songs (specify number: `.pl artist 20`)\n"
                   "• YouTube playlists, mixes, radio, & YouTube Music albums ✅\n"
                   "• Artist search: finds multiple songs by that artist\n"
                   "• Auto-skips duplicates already in queue",
@@ -2409,16 +2415,16 @@ async def help_command(ctx, category: str = None):
         )
         
         embed.add_field(
-            name="`!playnext` / `!pn <url/search/number>`",
+            name="`.playnext` / `.pn <url/search/number>`",
             value="**Insert song next OR jump to queue position**\n"
                   "• With URL/search: adds song to play next\n"
-                  "• With number: jumps to that queue position (e.g., `!pn 5`)\n"
+                  "• With number: jumps to that queue position (e.g., `.pn 5`)\n"
                   "• Useful for priority requests or quick navigation",
             inline=False
         )
         
         embed.add_field(
-            name="`!skip` / `!next`",
+            name="`.skip` / `.next`",
             value="**Skip to next song in queue**\n"
                   "• Stops current playback immediately\n"
                   "• Automatically plays next queued song\n"
@@ -2427,7 +2433,7 @@ async def help_command(ctx, category: str = None):
         )
         
         embed.add_field(
-            name="`!restart`",
+            name="`.restart`",
             value="**Restart current song from beginning**\n"
                   "• Useful if song started mid-way\n"
                   "• Re-extracts fresh stream data\n"
@@ -2436,7 +2442,7 @@ async def help_command(ctx, category: str = None):
         )
         
         embed.add_field(
-            name="`!nowplaying` / `!np`",
+            name="`.nowplaying` / `.np`",
             value="**Show current track info**\n"
                   "• Displays song title\n"
                   "• Shows who requested it\n"
@@ -2453,7 +2459,7 @@ async def help_command(ctx, category: str = None):
         )
         
         embed.add_field(
-            name="`!debug on/off`",
+            name="`.debug on/off`",
             value="**Diagnostic Information**\n"
                   "• **ON**: Detailed logs and error info\n"
                   "• **OFF**: Clean, minimal output\n"
@@ -2484,17 +2490,17 @@ async def help_command(ctx, category: str = None):
             value="• Bot is automatically optimized for speed\n"
                   "• Background preloading makes transitions instant\n"
                   "• Smart caching reduces repeated extractions\n"
-                  "• Join voice channel before using `!play`",
+                  "• Join voice channel before using `.play`",
             inline=False
         )
         
         embed.add_field(
             name="🔧 **Troubleshooting**",
-            value="• If song starts mid-way: use `!restart`\n"
-                  "• If no audio: check `!status` and enable `!debug on`\n"
-                  "• Use `!remove <number>` to remove problematic songs\n"
-                  "• Use `!pn <number>` to jump to a specific queue position\n"
-                  "• Use `!skip` if a song is stuck or not playing",
+            value="• If song starts mid-way: use `.restart`\n"
+                  "• If no audio: check `.status` and enable `.debug on`\n"
+                  "• Use `.remove <number>` to remove problematic songs\n"
+                  "• Use `.pn <number>` to jump to a specific queue position\n"
+                  "• Use `.skip` if a song is stuck or not playing",
             inline=False
         )
         
@@ -2510,9 +2516,9 @@ async def help_command(ctx, category: str = None):
         embed.add_field(
             name="⚡ **Pro Tips**",
             value="• Queue multiple songs for continuous playback\n"
-                  "• Use `!volume` to adjust without re-extraction\n"
+                  "• Use `.volume` to adjust without re-extraction\n"
                   "• Bot auto-leaves after 30 seconds of inactivity\n"
-                  "• `!leave` stops everything and clears queue",
+                  "• `.leave` stops everything and clears queue",
             inline=False
         )
         
@@ -2521,7 +2527,7 @@ async def help_command(ctx, category: str = None):
     else:
         await ctx.send(f"Unknown help category: `{category}`\n"
                       f"Available categories: `music`, `settings`, `tips`\n"
-                      f"Use `!help` for main command list.")
+                      f"Use `.help` for main command list.")
 
 # ============================================================================
 # BOT COMMANDS - Fun & Miscellaneous

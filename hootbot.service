@@ -1,0 +1,35 @@
+# ============================================================
+# HootBot - systemd service unit (Linux)
+# ============================================================
+# After the laptop wipe:
+#   1. Edit User= and WorkingDirectory=/ExecStart= paths below
+#   2. sudo cp hootbot.service /etc/systemd/system/
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable --now hootbot
+#
+# Useful commands:
+#   sudo systemctl status hootbot
+#   sudo systemctl restart hootbot
+#   journalctl -u hootbot -f       # live logs
+# ============================================================
+[Unit]
+Description=HootBot Discord Music Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# EDIT: replace 'youruser' with the Linux username you'll be using
+User=youruser
+# EDIT: replace with the actual path where HootBot lives
+WorkingDirectory=/home/youruser/HootBot
+ExecStart=/home/youruser/HootBot/.venv/bin/python /home/youruser/HootBot/main.py
+Restart=on-failure
+RestartSec=10
+# Load the .env file variables into the service environment
+EnvironmentFile=/home/youruser/HootBot/.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

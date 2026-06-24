@@ -17,6 +17,16 @@ cookies.txt
 
 # Backup files
 *_backup.py
+*.bak
+
+# Database files
+*.db
+
+# Intro/welcome audio files (binary, keep local only)
+intros/
+
+# Claude skill files
+*.skill.md
 
 # Test files
 test_*.py
