@@ -170,12 +170,11 @@ class MusicBot:
             'quiet': True,
             'no_warnings': True,
             'skip_download': True,
-            'no_playlist': True,
+            'noplaylist': True,
             'socket_timeout': 5,
             'retries': 1,
             'extract_flat': False,
             'cachedir': False,
-            'no_check_certificate': True,
             'playlist_items': '1',
             'js_runtimes': {'node': {}},
             # Add headers to bypass 403 errors
@@ -211,7 +210,6 @@ class MusicBot:
             'fragment_retries': 2,
             'ignore_errors': False,
             'cachedir': False,
-            'no_check_certificate': True,
             'js_runtimes': {'node': {}},
             # Add headers to bypass 403 errors
             'http_headers': {
@@ -878,13 +876,7 @@ class MusicBot:
                 'socket_timeout': 15,  # Longer timeout for radio playlists
                 'retries': 3,
                 'cachedir': False,
-                'no_check_certificate': True,
                 'ignoreerrors': True,  # Continue on errors
-                    'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android_vr'],
-                    }
-                },
                 # Add headers to bypass 403 errors
                 'http_headers': {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -2414,7 +2406,7 @@ async def quick_commands(ctx):
     embed.add_field(
         name="**Basic**",
         value="`.play <url>` - Play song\n"
-              "`.playlist <url>` - Add playlist (10 songs)\n"
+              "`.playlist <url>` - Add playlist (15 songs)\n"
               "`.skip` - Next song\n"
               "`.pause` / `.resume`\n"
               "`.queue` - Show queue\n"
@@ -2515,8 +2507,8 @@ async def help_command(ctx, category: str = None):
         embed.add_field(
             name="`.playlist` / `.pl <url or artist>`",
             value="**Add multiple songs from playlist or artist search**\n"
-                  "• Default: 10 songs (specify number: `.pl artist 20`)\n"
-                  "• YouTube playlists, mixes, radio, & YouTube Music albums ✅\n"
+                  "• Default: 15 songs (specify number: `.pl artist 20`)\n"
+                  "• YouTube playlists, mixes & radio ✅ (YouTube Music links don't work)\n"
                   "• Artist search: finds multiple songs by that artist\n"
                   "• Auto-skips duplicates already in queue",
             inline=False
@@ -2615,7 +2607,7 @@ async def help_command(ctx, category: str = None):
         embed.add_field(
             name="🎶 **URL Support**",
             value="• YouTube videos & playlists ✅\n"
-                  "• YouTube Music (songs, albums, playlists) ✅\n"
+                  "• YouTube Music links ❌ (use the regular youtube.com link)\n"
                   "• Shortened youtu.be links ✅\n"
                   "• Auto-detects playlist vs single video",
             inline=False
