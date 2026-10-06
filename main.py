@@ -25,6 +25,7 @@ from pathlib import Path
 import aiohttp
 import random
 import time
+import copy
 from datetime import datetime, timedelta
 
 # Load environment variables
@@ -55,6 +56,7 @@ DEBUG = True  # Enable debug logging to diagnose issues
 IDLE_TIMEOUT = 30  # Seconds before bot leaves due to inactivity
 ULTRA_FAST = True  # Skip all non-essential extraction steps
 CACHE_DURATION = 300  # Cache stream URLs for 5 minutes (seconds)
+INFO_REUSE_MAX_AGE = 1800  # Download from already-extracted info if it's newer than this (YouTube URLs expire after ~6h)
 
 # Download Settings
 FORCE_DOWNLOAD = True  # Always download to ensure songs start at 0:00 (slower but reliable)
@@ -270,6 +272,7 @@ class MusicBot:
                 formats = info.get('formats', [])
                 with_url = sum(1 for f in formats if f and f.get('url'))
                 info['_needs_download'] = len(formats) > 0 and with_url * 3 < len(formats)
+                info['_extracted_at'] = time.time()
                 logger.info(f'Extracted {url}: {len(formats)} formats, {with_url} with URLs')
             return info
         except Exception as e:
@@ -302,6 +305,7 @@ class MusicBot:
                 if info.get('is_live') or info.get('live_status') == 'is_live':
                     logger.warning(f'Detected live stream, rejecting: {url}')
                     return None
+                info['_extracted_at'] = time.time()
                 # Cache it
                 self.prune_info_cache()
                 self.info_cache[url] = info
@@ -379,16 +383,32 @@ class MusicBot:
         
         return None, False
     
-    async def download_audio(self, url, title="Unknown"):
-        """Download audio for reliable playback from 0:00."""
+    async def download_audio(self, url, title="Unknown", info=None):
+        """Download audio for reliable playback from 0:00.
+
+        If recently extracted info is passed in, download from it directly instead of
+        extracting the video a second time (saves ~1s per song).
+        """
         try:
             logger.info(f"Starting download for: {title} from {url}")
             loop = asyncio.get_running_loop()
             
-            # Download with full extraction
-            download_info = await loop.run_in_executor(
-                None, lambda: self.ytdl.extract_info(url, download=True)
-            )
+            download_info = None
+            if info and time.time() - info.get('_extracted_at', 0) < INFO_REUSE_MAX_AGE:
+                try:
+                    info_copy = copy.deepcopy(info)  # yt-dlp mutates the dict; keep the cached one clean
+                    download_info = await loop.run_in_executor(
+                        None, lambda: self.ytdl.process_ie_result(info_copy, download=True)
+                    )
+                except Exception as e:
+                    logger.warning(f"Download from cached info failed for {title}, re-extracting: {e}")
+                    download_info = None
+
+            if not download_info:
+                # Download with full extraction
+                download_info = await loop.run_in_executor(
+                    None, lambda: self.ytdl.extract_info(url, download=True)
+                )
             
             if not download_info:
                 logger.error(f"No download info returned for {title}")
@@ -469,7 +489,7 @@ class MusicBot:
             # If FORCE_DOWNLOAD is enabled, also predownload the file
             if FORCE_DOWNLOAD:
                 logger.info(f"📥 Pre-downloading: {next_entry.title}")
-                filepath, _ = await self.download_audio(next_entry.url, next_entry.title)
+                filepath, _ = await self.download_audio(next_entry.url, next_entry.title, next_entry.info)
                 if filepath:
                     next_entry.filepath = filepath  # Cache so play_audio skips re-download
                     logger.info(f"✅ Pre-downloaded ready: {next_entry.title}")
@@ -1245,7 +1265,7 @@ async def play_audio(ctx, entry):
                 download_info = entry.info
                 logger.info(f"Using pre-downloaded file: {filepath}")
             else:
-                filepath, download_info = await music_bot.download_audio(entry.url, entry.title)
+                filepath, download_info = await music_bot.download_audio(entry.url, entry.title, entry.info)
 
             if not filepath:
                 logger.error(f"Download returned no filepath for {entry.title}")
