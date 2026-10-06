@@ -95,6 +95,9 @@ intents.message_content = True
 intents.voice_states = True  # Enable voice state tracking
 bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 
+# Restricts maintenance commands to the bot's owner (Discord application owner) or server admins
+admin_only = commands.check_any(commands.is_owner(), commands.has_permissions(administrator=True))
+
 # ============================================================================
 # DATA CLASSES
 # ============================================================================
@@ -300,6 +303,7 @@ class MusicBot:
                     logger.warning(f'Detected live stream, rejecting: {url}')
                     return None
                 # Cache it
+                self.prune_info_cache()
                 self.info_cache[url] = info
                 self.cache_times[url] = time.time()
                 logger.info(f'Fast extraction complete for: {info.get("title", "Unknown")}')
@@ -314,6 +318,17 @@ class MusicBot:
             # Fallback to standard extraction for other errors
             return await self.extract_info(url)
     
+    def prune_info_cache(self, max_entries=200):
+        """Drop expired entries, and the oldest ones beyond max_entries, so memory doesn't grow forever."""
+        now = time.time()
+        for url in [u for u, t in self.cache_times.items() if now - t >= CACHE_DURATION]:
+            self.info_cache.pop(url, None)
+            self.cache_times.pop(url, None)
+        if len(self.info_cache) >= max_entries:
+            for url in sorted(self.cache_times, key=self.cache_times.get)[:len(self.info_cache) - max_entries + 1]:
+                self.info_cache.pop(url, None)
+                self.cache_times.pop(url, None)
+
     def select_format(self, info):
         """Select best audio format optimized for speed."""
         formats = info.get('formats', [])
@@ -1024,6 +1039,54 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.data = data or {}
         self.title = self.data.get('title', 'Unknown')
 
+class IntroThenResume(discord.AudioSource):
+    """Plays an intro clip, then continues the interrupted song from where it was.
+
+    Swapped in via voice_client.source so the song's after-callback is untouched:
+    no stop(), no lost song, and the queue advances normally when the song ends.
+    """
+    def __init__(self, intro, original):
+        self.intro = intro
+        self.original = original
+        self.intro_done = False
+
+    @property
+    def volume(self):
+        # .volume and .status act on the song, not the intro
+        return self.original.volume
+
+    @volume.setter
+    def volume(self, value):
+        self.original.volume = value
+
+    def read(self):
+        if not self.intro_done:
+            data = self.intro.read()
+            if data:
+                return data
+            self.intro_done = True
+            self.intro.cleanup()
+        return self.original.read()
+
+    def is_opus(self):
+        return False
+
+    def cleanup(self):
+        if not self.intro_done:
+            self.intro.cleanup()
+        self.original.cleanup()
+
+class ChannelContext:
+    """Minimal stand-in for commands.Context, for code paths not triggered by a command."""
+    def __init__(self, guild, channel):
+        self.guild = guild
+        self.channel = channel
+
+    async def send(self, *args, **kwargs):
+        if self.channel:
+            return await self.channel.send(*args, **kwargs)
+        logger.warning("No text channel available, dropping message")
+
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
@@ -1112,6 +1175,13 @@ def _kick_preload():
         if music_bot.preload_task and not music_bot.preload_task.done():
             music_bot.preload_task.cancel()
         music_bot.preload_task = asyncio.create_task(music_bot.preload_next_song())
+
+async def wait_for_voice_idle(voice_client, max_wait=20):
+    """Wait briefly if something (e.g. a welcome intro) is already playing, so play() doesn't fail."""
+    waited = 0.0
+    while voice_client.is_playing() and waited < max_wait:
+        await asyncio.sleep(0.2)
+        waited += 0.2
 
 async def play_audio(ctx, entry):
     """Play audio for a queue entry - optimized for instant playback."""
@@ -1203,6 +1273,7 @@ async def play_audio(ctx, entry):
                 logger.info("Voice client gone after download — bot disconnected, skipping playback")
                 return False
 
+            await wait_for_voice_idle(voice_client)
             try:
                 source = YTDLSource(
                     discord.FFmpegPCMAudio(filepath, **music_bot.get_ffmpeg_options(is_file=True)),
@@ -1228,6 +1299,7 @@ async def play_audio(ctx, entry):
                 logger.info("Voice client gone before streaming — bot disconnected, skipping playback")
                 return False
 
+            await wait_for_voice_idle(voice_client)
             try:
                 source = YTDLSource(
                     discord.FFmpegPCMAudio(stream_url, **music_bot.get_ffmpeg_options(is_file=False)),
@@ -1371,7 +1443,8 @@ async def handle_idle(ctx):
     """Handle idle timeout."""
     await asyncio.sleep(IDLE_TIMEOUT)
     voice_client = ctx.guild.voice_client
-    if voice_client and not voice_client.is_playing() and not music_bot.queue:
+    if (voice_client and not voice_client.is_playing() and not music_bot.queue
+            and not music_bot.is_extracting_playlist):
         await ctx.send(random.choice(IDLE_MESSAGES))
         await leave_voice(ctx)
 
@@ -2125,6 +2198,7 @@ async def volume(ctx, value: int):
 # ============================================================================
 
 @bot.command(name='files')
+@admin_only
 async def list_files(ctx):
     """List downloaded files from the HootBot downloads folder."""
     try:
@@ -2165,6 +2239,7 @@ async def list_files(ctx):
         logger.error(f"Files listing error: {e}")
 
 @bot.command(name='cleanup')
+@admin_only
 async def manual_cleanup(ctx, hours: int = 24):
     """Manually clean up files older than specified hours from the HootBot downloads folder ONLY."""
     if hours < 1:
@@ -2218,6 +2293,7 @@ async def manual_cleanup(ctx, hours: int = 24):
 # ============================================================================
 
 @bot.command(name='debug')
+@admin_only
 async def toggle_debug(ctx, mode: str = None):
     global DEBUG
     if mode is None:
@@ -2531,6 +2607,7 @@ async def help_command(ctx, category: str = None):
 # ============================================================================
 
 @bot.command(name='checkupdates')
+@admin_only
 async def check_updates(ctx):
     """Check and automatically update outdated dependencies."""
     import subprocess
@@ -2550,7 +2627,8 @@ async def check_updates(ctx):
         ffmpeg_version = "Not installed"
         ffmpeg_installed = False
         try:
-            ffmpeg_result = subprocess.run(
+            ffmpeg_result = await asyncio.to_thread(
+                subprocess.run,
                 ['ffmpeg', '-version'],
                 capture_output=True,
                 text=True,
@@ -2572,7 +2650,8 @@ async def check_updates(ctx):
             ffmpeg_version = f"❌ Error: {str(e)[:50]}"
         
         # Get list of outdated packages
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             [sys.executable, '-m', 'pip', 'list', '--outdated', '--format=json'],
             capture_output=True,
             text=True,
@@ -2598,7 +2677,8 @@ async def check_updates(ctx):
                 )
                 
                 # Show current versions of core packages
-                version_result = subprocess.run(
+                version_result = await asyncio.to_thread(
+                    subprocess.run,
                     [sys.executable, '-m', 'pip', 'show', 'discord.py', 'yt-dlp', 'PyNaCl'],
                     capture_output=True,
                     text=True
@@ -2651,7 +2731,8 @@ async def check_updates(ctx):
             await status_msg.edit(embed=embed)
             
             # Update packages
-            update_result = subprocess.run(
+            update_result = await asyncio.to_thread(
+                subprocess.run,
                 [sys.executable, '-m', 'pip', 'install', '--upgrade'] + packages_to_update,
                 capture_output=True,
                 text=True,
@@ -2830,6 +2911,22 @@ async def get_random_cat_image():
 # RECONNECT HELPER
 # ============================================================================
 
+async def resume_after_intro(guild):
+    """After a standalone welcome intro: continue the queue, or start the normal idle timeout.
+
+    Going through handle_idle -> leave_voice also clears current_track, so the
+    disconnect isn't mistaken for a crash by the auto-reconnect logic.
+    """
+    text_channel = music_bot.last_text_channel.get(guild.id) or bot.get_channel(BOT_OUTPUT_CHANNEL_ID)
+    ctx = ChannelContext(guild, text_channel)
+    if music_bot.queue:
+        await play_next(ctx)
+    elif guild.id not in music_bot.play_next_running:
+        old_task = music_bot.timeout_tasks.pop(guild.id, None)
+        if old_task:
+            old_task.cancel()
+        music_bot.timeout_tasks[guild.id] = asyncio.create_task(handle_idle(ctx))
+
 async def reconnect_and_resume(guild, channel):
     """Attempt to reconnect to voice and resume the queue after an unexpected disconnect."""
     await asyncio.sleep(3)  # Let Discord settle before reconnecting
@@ -2856,15 +2953,7 @@ async def reconnect_and_resume(guild, channel):
 
         if text_channel:
             await text_channel.send("🔄 Reconnected to voice channel, resuming playback...")
-
-            class FakeCtx:
-                def __init__(self, guild, channel):
-                    self.guild = guild
-                    self.channel = channel
-                async def send(self, *args, **kwargs):
-                    return await self.channel.send(*args, **kwargs)
-
-            await play_next(FakeCtx(guild, text_channel))
+            await play_next(ChannelContext(guild, text_channel))
         else:
             logger.warning("No text channel stored for reconnect — playback not resumed")
 
@@ -2903,6 +2992,9 @@ async def on_message(message):
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         logger.warning(f"[cmd_error] CommandNotFound: '{ctx.message.content}' from {ctx.author}")
+    elif isinstance(error, commands.CheckFailure):
+        logger.warning(f"[cmd_error] Not allowed: '{ctx.message.content}' from {ctx.author}")
+        await ctx.send("❌ Only server admins can use that command.")
     elif isinstance(error, commands.MissingRequiredArgument):
         logger.warning(f"[cmd_error] MissingArgument: '{ctx.message.content}' from {ctx.author} — {error}")
         await ctx.send(f"❌ Missing argument: `{error.param.name}`")
@@ -2981,76 +3073,26 @@ async def on_voice_state_update(member, before, after):
                     logger.error(f'Failed to move to channel: {e}')
                     return
             
-            # Play the welcome sound (interrupt current playback if any)
+            # Play the welcome sound. If a song is playing, splice the intro in front of
+            # the rest of it instead of stopping it (stop() would advance the queue and lose the song).
             try:
-                # Check if bot was playing something and save the state
-                was_playing = voice_client.is_playing()
-                had_queue = len(music_bot.queue) > 0
-                
-                # Stop current playback if playing (this will NOT clear the queue)
-                if was_playing:
-                    voice_client.stop()
-                    logger.info('Paused current playback for intro')
-                
-                # Play the local intro file with reduced volume (20%)
-                source = discord.FFmpegPCMAudio(WELCOME_SOUND_FILE)
-                source = discord.PCMVolumeTransformer(source, volume=0.20)
-                
-                # Define callback to disconnect after sound finishes
-                async def disconnect_after_intro(error):
-                    try:
-                        if error:
-                            logger.error(f'Error during intro playback: {error}')
-                        logger.info('Welcome sound finished')
-                        
-                        # Resume playback if there was a queue
-                        if had_queue or was_playing:
-                            logger.info('Resuming queue after intro')
-                            # Create a minimal context object for play_next
-                            class FakeContext:
-                                def __init__(self, guild):
-                                    self.guild = guild
-                            
-                            fake_ctx = FakeContext(guild)
-                            await play_next(fake_ctx)
-                            return  # Exit callback - don't disconnect
-                        
-                        # No queue, so proceed with disconnect timer
-                        logger.info('No queue to resume, waiting 30 seconds before disconnect')
-                        await asyncio.sleep(30)
-                        logger.info(f'30 seconds elapsed, checking if still connected...')
-                        
-                        # Check if playlist extraction started during the timer
-                        if music_bot.is_extracting_playlist:
-                            logger.info('Playlist extraction in progress, skipping disconnect')
-                            return
-                        
-                        # Check if queue was populated during the timer
-                        if len(music_bot.queue) > 0:
-                            logger.info('Queue populated during timeout, skipping disconnect')
-                            return
-                        
-                        if voice_client.is_connected():
-                            logger.info('Bot is still connected, proceeding with disconnect')
-                            # Find the specific text channel to send the message
-                            text_channel = discord.utils.get(after.channel.guild.text_channels, name='hootbot-music-spam')
-                            if text_channel:
-                                logger.info(f'Sending leaving message to {text_channel.name}')
-                                await text_channel.send(random.choice(IDLE_MESSAGES))
-                            else:
-                                logger.warning('Could not find hootbot-music-spam channel')
-                            await voice_client.disconnect()
-                            logger.info(f'Successfully disconnected from {after.channel.name} after intro timeout')
-                        else:
-                            logger.info('Bot already disconnected, skipping')
-                    except Exception as ex:
-                        logger.error(f'Exception in disconnect_after_intro callback: {ex}', exc_info=True)
-                
-                # Create task for the callback
-                def sync_callback(error):
-                    asyncio.run_coroutine_threadsafe(disconnect_after_intro(error), bot.loop)
-                
-                voice_client.play(source, after=sync_callback)
+                intro = discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(WELCOME_SOUND_FILE), volume=0.20)
+
+                if voice_client.is_playing():
+                    voice_client.source = IntroThenResume(intro, voice_client.source)
+                    logger.info(f'Playing intro for {member.name}, song resumes afterwards')
+                    return
+                if voice_client.is_paused():
+                    intro.cleanup()
+                    logger.info('Music is paused, skipping intro')
+                    return
+
+                def after_intro(error):
+                    if error:
+                        logger.error(f'Error during intro playback: {error}')
+                    asyncio.run_coroutine_threadsafe(resume_after_intro(guild), bot.loop)
+
+                voice_client.play(intro, after=after_intro)
                 logger.info(f'Playing intro for {member.name}')
             except Exception as e:
                 logger.error(f'Failed to play welcome sound: {e}')
@@ -3060,6 +3102,7 @@ async def on_voice_state_update(member, before, after):
 # ============================================================================
 
 @bot.command(name='welcomeon', help='Enable welcome sounds when users join the voice channel')
+@admin_only
 async def welcome_on(ctx):
     """Enable welcome sounds for this server"""
     guild_id = ctx.guild.id
@@ -3068,6 +3111,7 @@ async def welcome_on(ctx):
     logger.info(f'Welcome sounds enabled for guild {guild_id}')
 
 @bot.command(name='welcomeoff', help='Disable welcome sounds when users join the voice channel')
+@admin_only
 async def welcome_off(ctx):
     """Disable welcome sounds for this server"""
     guild_id = ctx.guild.id
