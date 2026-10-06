@@ -69,9 +69,24 @@ Current_volume = 0.1  # Default volume (10%)
 # Discord Bot Token
 TOKEN = os.environ.get('DISCORD_TOKEN', 'YOUR_TOKEN_HERE')
 
-# Welcome Sound Settings (for user 271755277663993856)
-WELCOME_CHANNEL_NAME = "Chillekevineese"  # Channel to monitor for joins
-WELCOME_SOUND_FILE = str(BASE_DIR / "intros" / "Erika Intro.mp3")
+def _env_id(name):
+    """A single Discord ID from the environment (.env), or None if unset."""
+    value = os.environ.get(name, '').strip()
+    return int(value) if value else None
+
+def _env_ids(name):
+    """Comma-separated Discord IDs from the environment (.env), as a set."""
+    return {int(part) for part in os.environ.get(name, '').replace(' ', '').split(',') if part}
+
+# Server-specific IDs and names live in .env (see .env.example). Anything unset is disabled.
+TRUSTED_BOTS = _env_ids('TRUSTED_BOT_IDS')                # Bots allowed to send commands (e.g. OpenClaw)
+BOT_OUTPUT_CHANNEL_ID = _env_id('BOT_OUTPUT_CHANNEL_ID')  # If set, all responses go to this text channel
+SKEET_USER_ID = _env_id('SKEET_USER_ID')                  # User the .skeet command is aimed at
+
+# Welcome sound: plays when WELCOME_USER_ID joins WELCOME_CHANNEL_NAME (and .welcomeon is set)
+WELCOME_USER_ID = _env_id('WELCOME_USER_ID')
+WELCOME_CHANNEL_NAME = os.environ.get('WELCOME_CHANNEL_NAME', '')
+WELCOME_SOUND_FILE = str(BASE_DIR / "intros" / os.environ.get('WELCOME_SOUND', ''))
 
 # ============================================================================
 # LOGGING SETUP
@@ -2801,7 +2816,7 @@ async def check_updates(ctx):
 async def skeet(ctx):
     """Send a random cat fact with a cute cat image and ping skeetanese."""
     # Try to find the specific user by ID first (more reliable)
-    target_user = bot.get_user(209039208294121472) or ctx.guild.get_member(209039208294121472)
+    target_user = (bot.get_user(SKEET_USER_ID) or ctx.guild.get_member(SKEET_USER_ID)) if SKEET_USER_ID else None
     
     # Fallback to name search if ID lookup fails
     if not target_user:
@@ -2937,7 +2952,9 @@ async def resume_after_intro(guild):
     Going through handle_idle -> leave_voice also clears current_track, so the
     disconnect isn't mistaken for a crash by the auto-reconnect logic.
     """
-    text_channel = music_bot.last_text_channel.get(guild.id) or bot.get_channel(BOT_OUTPUT_CHANNEL_ID)
+    text_channel = music_bot.last_text_channel.get(guild.id)
+    if not text_channel and BOT_OUTPUT_CHANNEL_ID:
+        text_channel = bot.get_channel(BOT_OUTPUT_CHANNEL_ID)
     ctx = ChannelContext(guild, text_channel)
     if music_bot.queue:
         await play_next(ctx)
@@ -2986,13 +3003,10 @@ async def reconnect_and_resume(guild, channel):
 # BOT EVENTS
 # ============================================================================
 
-TRUSTED_BOTS = {1489787854925332610}  # OpenClaw bot ID
-BOT_OUTPUT_CHANNEL_ID = 1376414642334601297  # Only channel HootBot sends responses to
-
 class HootContext(commands.Context):
     """Custom context that redirects all bot responses to the designated output channel."""
     async def send(self, *args, **kwargs):
-        output_channel = self.bot.get_channel(BOT_OUTPUT_CHANNEL_ID)
+        output_channel = self.bot.get_channel(BOT_OUTPUT_CHANNEL_ID) if BOT_OUTPUT_CHANNEL_ID else None
         if output_channel and self.channel.id != BOT_OUTPUT_CHANNEL_ID:
             return await output_channel.send(*args, **kwargs)
         return await super().send(*args, **kwargs)
@@ -3053,7 +3067,7 @@ async def on_voice_state_update(member, before, after):
         return
     
     # Only trigger for specific user
-    if member.id != 271755277663993856:
+    if not WELCOME_USER_ID or member.id != WELCOME_USER_ID:
         logger.debug(f'Ignoring user {member.name} (not target user)')
         return
     
