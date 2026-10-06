@@ -157,11 +157,7 @@ class MusicBot:
             'cachedir': False,
             'no_check_certificate': True,
             'playlist_items': '1',
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android_vr'],
-                }
-            },
+            'js_runtimes': {'node': {}},
             # Add headers to bypass 403 errors
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -174,6 +170,11 @@ class MusicBot:
         # No cookies for ytdl_fast: when cookies are present, YouTube requires PO tokens
         # even for the iOS client, which needs a JS runtime we don't have.
         # Anonymous iOS requests bypass PO token requirements entirely.
+        # Also: don't force player_client=android_vr — that client's https formats now
+        # require a GVS PO Token we can't provide, so yt-dlp drops most of them (~5 left
+        # vs ~41 with default client selection), which is what caused the 403/"unavailable"
+        # errors. Let yt-dlp pick clients itself; js_runtimes=node lets it use the
+        # Node.js already installed on the server instead of the missing default (deno).
 
         self.ytdl_fast = yt_dlp.YoutubeDL(ytdl_fast_opts)
         
@@ -191,11 +192,7 @@ class MusicBot:
             'ignore_errors': False,
             'cachedir': False,
             'no_check_certificate': True,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android_vr'],
-                }
-            },
+            'js_runtimes': {'node': {}},
             # Add headers to bypass 403 errors
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
