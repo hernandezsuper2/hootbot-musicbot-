@@ -7,7 +7,7 @@ from .. import config
 from ..config import logger, TRUSTED_BOTS
 from ..core import bot
 from ..music import music_bot, QueueEntry
-from ..playback import play_next, leave_voice
+from ..playback import play_next, leave_voice, clear_ghost_voice_state
 from ..utils import reject_multiple_commands, is_playlist_url, extract_video_id_from_playlist
 
 # ============================================================================
@@ -42,6 +42,8 @@ async def join(ctx):
                 return  # Already in the right channel, nothing to do
             await voice_client.move_to(channel)
         else:
+            if await clear_ghost_voice_state(ctx.guild):
+                await asyncio.sleep(1)  # let Discord process the leave before rejoining
             await channel.connect()
     except asyncio.TimeoutError:
         logger.error(f"Timed out connecting to channel '{channel.name}' (ID: {channel.id}) in guild '{ctx.guild.name}'")
@@ -178,7 +180,6 @@ async def play(ctx, *, url):
     if not voice_client:
         await join(ctx)
         voice_client = ctx.guild.voice_client
-
     if not voice_client:
         await ctx.send("❌ Could not connect to your voice channel.")
         return
@@ -223,6 +224,8 @@ async def playnext(ctx, *, url):
     if not voice_client:
         await join(ctx)
         voice_client = ctx.guild.voice_client
+    if not voice_client:
+        return  # join() already told the user why
 
     # Check if url is a number (queue position)
     if url.strip().isdigit():
@@ -341,6 +344,8 @@ async def playlist(ctx, *, query: str):
         if not voice_client:
             await join(ctx)
             voice_client = ctx.guild.voice_client
+        if not voice_client:
+            return  # join() already told the user why
         
         # Check queue limit
         current_queue_size = len(music_bot.queue)
@@ -416,6 +421,8 @@ async def playlist(ctx, *, query: str):
     if not voice_client:
         await join(ctx)
         voice_client = ctx.guild.voice_client
+    if not voice_client:
+        return  # join() already told the user why
 
     # Remember this playlist so !more can continue from where we left off
     music_bot.last_playlist_url = url
@@ -515,6 +522,8 @@ async def more(ctx, max_songs: int = 15):
     if not voice_client:
         await join(ctx)
         voice_client = ctx.guild.voice_client
+    if not voice_client:
+        return  # join() already told the user why
 
     if max_songs < 1:
         max_songs = 1
@@ -610,11 +619,10 @@ async def resume(ctx):
 @bot.command(name='stop')
 async def stop(ctx):
     """Stop playback, clear queue, and leave voice channel."""
-    if not ctx.guild.voice_client:
+    count = await leave_voice(ctx)
+    if count is None:
         await ctx.send("Not connected to a voice channel.")
         return
-
-    count = await leave_voice(ctx)
 
     if count and count > 0:
         await ctx.send(f"⏹️ Stopped playback, cleared {count} song(s), and left voice channel.")

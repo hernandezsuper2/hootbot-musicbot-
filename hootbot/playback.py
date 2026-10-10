@@ -336,15 +336,33 @@ async def handle_idle(ctx):
         await ctx.send(random.choice(IDLE_MESSAGES))
         await leave_voice(ctx)
 
+async def clear_ghost_voice_state(guild):
+    """Tell Discord we've left voice if it still shows the bot in a channel with no live voice client.
+
+    This happens when a network drop leaves discord.py's voice reconnect loop stuck:
+    the bot looks connected in Discord but nothing is actually connected. Returns
+    True if a ghost was found and cleared.
+    """
+    if guild.voice_client or not (guild.me.voice and guild.me.voice.channel):
+        return False
+    logger.warning(f"Clearing stale voice state in {guild.name} (shown in '{guild.me.voice.channel.name}' with no voice client)")
+    try:
+        await guild.change_voice_state(channel=None)
+    except Exception as e:
+        logger.error(f"Could not clear stale voice state in {guild.name}: {e}")
+    return True
+
 async def leave_voice(ctx):
     """Leave voice channel and cleanup."""
     voice_client = ctx.guild.voice_client
     if not voice_client:
+        if await clear_ghost_voice_state(ctx.guild):
+            return music_bot.clear_queue()
         return
-    
+
     if voice_client.is_playing() or voice_client.is_paused():
         voice_client.stop()
-    
+
     count = music_bot.clear_queue()
     
     # Cancel timeout — skip self-cancel when called from inside the idle task itself,
@@ -358,7 +376,15 @@ async def leave_voice(ctx):
         del music_bot.timeout_tasks[guild_id]
 
     await set_channel_status(ctx.guild, None)
-    await voice_client.disconnect()
+    # force=True: after a network drop the voice client can report "not connected"
+    # while Discord still shows the bot in the channel. Without force, disconnect()
+    # silently does nothing and the bot never actually leaves.
+    try:
+        await asyncio.wait_for(voice_client.disconnect(force=True), timeout=15)
+    except asyncio.TimeoutError:
+        logger.warning(f"Voice disconnect timed out in {ctx.guild.name}, forcing cleanup")
+        voice_client.cleanup()
+    await clear_ghost_voice_state(ctx.guild)
     return count
 
 # ============================================================================
